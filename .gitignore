@@ -9,3 +9,5 @@ out/
 
 .env
 .env.local
+
+CLAUDE.md

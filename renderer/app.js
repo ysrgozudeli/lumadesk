@@ -20,7 +20,7 @@ async function initMermaid() {
 async function renderMermaidBlocks() {
   if (!mermaidReady) return;
 
-  const codeBlocks = previewEl.querySelectorAll('code.language-mermaid');
+  const codeBlocks = previewEl.querySelectorAll('code.language-mermaid, code[class*="language-mermaid"], code[class*="language- mermaid"]');
   for (const code of codeBlocks) {
     const pre = code.parentElement;
     const source = code.textContent;
@@ -45,8 +45,8 @@ async function captureMermaidImages(markdown) {
   if (!mermaidReady) return {};
   const images = {};
 
-  // Extract mermaid blocks from markdown — store both trimmed and raw versions
-  const regex = /```mermaid\s*\n([\s\S]*?)```/g;
+  // Extract mermaid blocks from markdown — handles ```mermaid and ``` mermaid (with space)
+  const regex = /```\s*mermaid\s*\n([\s\S]*?)```/g;
   let match;
   const sources = [];
   while ((match = regex.exec(markdown)) !== null) {
