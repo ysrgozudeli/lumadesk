@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('lumadesk', {
   setExtensions: (exts) => ipcRenderer.invoke('set-extensions', exts),
 
   exportWordWithImages: (options) => ipcRenderer.invoke('export-word-with-images', options),
+  exportPdf: (options) => ipcRenderer.invoke('export-pdf', options),
 
   // Events from main process
   onFileChanged: (callback) => ipcRenderer.on('file-changed', (_e, filePath) => callback(filePath)),

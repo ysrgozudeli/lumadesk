@@ -45,8 +45,8 @@ async function captureMermaidImages(markdown) {
   if (!mermaidReady) return {};
   const images = {};
 
-  // Extract mermaid blocks from markdown
-  const regex = /```mermaid\n([\s\S]*?)```/g;
+  // Extract mermaid blocks from markdown — store both trimmed and raw versions
+  const regex = /```mermaid\s*\n([\s\S]*?)```/g;
   let match;
   const sources = [];
   while ((match = regex.exec(markdown)) !== null) {
@@ -54,47 +54,71 @@ async function captureMermaidImages(markdown) {
   }
   if (sources.length === 0) return images;
 
-  // Render each in a hidden container
-  const hidden = document.createElement('div');
-  hidden.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
-  document.body.appendChild(hidden);
-
   for (const source of sources) {
     try {
       const id = 'cap-' + Math.random().toString(36).slice(2, 10);
       const { svg } = await mermaidModule.default.render(id, source);
 
-      // Convert SVG to PNG via canvas
-      const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
+      // Parse SVG to get actual dimensions from viewBox or attributes
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(svg, 'image/svg+xml');
+      const svgEl = svgDoc.querySelector('svg');
+
+      let svgWidth, svgHeight;
+      const viewBox = svgEl?.getAttribute('viewBox');
+      if (viewBox) {
+        const parts = viewBox.split(/[\s,]+/).map(Number);
+        if (parts.length === 4) {
+          svgWidth = parts[2];
+          svgHeight = parts[3];
+        }
+      }
+      // Fallback to explicit width/height attributes
+      if (!svgWidth) svgWidth = parseFloat(svgEl?.getAttribute('width')) || 800;
+      if (!svgHeight) svgHeight = parseFloat(svgEl?.getAttribute('height')) || 600;
+
+      // Set explicit dimensions on SVG so Image renders at full size
+      svgEl.setAttribute('width', String(svgWidth));
+      svgEl.setAttribute('height', String(svgHeight));
+      const fixedSvg = new XMLSerializer().serializeToString(svgEl);
+
+      // Convert SVG to PNG via base64 data URL (blob URLs get blocked by canvas security)
+      const svgBase64 = btoa(unescape(encodeURIComponent(fixedSvg)));
+      const svgDataUrl = 'data:image/svg+xml;base64,' + svgBase64;
+
       const img = new Image();
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = reject;
-        img.src = url;
+        img.src = svgDataUrl;
       });
 
-      const scale = 2; // retina quality
+      const scale = 3; // high-res for crisp text in Word
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth * scale;
-      canvas.height = img.naturalHeight * scale;
+      canvas.width = svgWidth * scale;
+      canvas.height = svgHeight * scale;
       const ctx = canvas.getContext('2d');
+      // White background for clean Word rendering
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.scale(scale, scale);
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
+      ctx.drawImage(img, 0, 0, svgWidth, svgHeight);
 
       const dataUrl = canvas.toDataURL('image/png');
-      images[source] = {
+
+      // Store under multiple keys to handle whitespace differences
+      const entry = {
         dataUrl,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
+        width: svgWidth,
+        height: svgHeight,
       };
+      // Store under trimmed source (matches marked lexer's token.text)
+      images[source] = entry;
     } catch (e) {
-      console.warn('Mermaid capture error:', e);
+      console.warn('Mermaid capture error for diagram:', e);
     }
   }
 
-  document.body.removeChild(hidden);
   return images;
 }
 
@@ -280,6 +304,7 @@ async function selectFile(filePath) {
   await renderMermaidBlocks();
 
   btnExportWord.disabled = false;
+  btnExportPdf.disabled = false;
   statusFile.textContent = filePath.split(/[/\\]/).pop();
   statusText.textContent = 'Ready';
 
@@ -357,6 +382,32 @@ document.addEventListener('mousemove', (e) => {
 
 document.addEventListener('mouseup', () => {
   isResizing = false;
+});
+
+// ---- PDF Export ----
+const btnExportPdf = $('#btn-export-pdf');
+
+btnExportPdf.addEventListener('click', async () => {
+  if (!currentContent) return;
+
+  statusText.textContent = 'Exporting to PDF...';
+  btnExportPdf.disabled = true;
+
+  // Send the rendered HTML (including mermaid SVGs) for a clean document PDF
+  const result = await window.lumadesk.exportPdf({
+    title: currentTitle,
+    html: previewEl.innerHTML,
+  });
+
+  if (result.success) {
+    statusText.textContent = `Exported: ${result.path}`;
+  } else if (result.error) {
+    statusText.textContent = `Export failed: ${result.error}`;
+  } else {
+    statusText.textContent = 'Export cancelled';
+  }
+
+  btnExportPdf.disabled = false;
 });
 
 // ---- Mermaid Fullscreen Modal ----
@@ -500,5 +551,9 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
     e.preventDefault();
     if (!btnExportWord.disabled) btnExportWord.click();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+    e.preventDefault();
+    if (!btnExportPdf.disabled) btnExportPdf.click();
   }
 });

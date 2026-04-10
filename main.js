@@ -93,6 +93,88 @@ ipcMain.handle('export-word-with-images', async (_event, { title, content, autho
   }
 });
 
+ipcMain.handle('export-pdf', async (_event, { title, html }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export as PDF',
+    defaultPath: `${sanitizeFilename(title)}.pdf`,
+    filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
+  });
+  if (result.canceled) return { canceled: true };
+
+  try {
+    // Create a hidden window with only the document content
+    const printWin = new BrowserWindow({
+      width: 800,
+      height: 600,
+      show: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    const styledHtml = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>${title}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #1f2937; line-height: 1.7; font-size: 11pt;
+    padding: 0; background: white;
+  }
+  .header { margin-bottom: 1.5em; padding-bottom: 0.8em; border-bottom: 2px solid #e5e7eb; }
+  .header h1 { font-size: 22pt; margin-bottom: 0.2em; }
+  .header .meta { color: #6b7280; font-size: 9pt; }
+  h1 { font-size: 18pt; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25em; margin: 1.2em 0 0.4em; }
+  h2 { font-size: 14pt; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.2em; margin: 1em 0 0.4em; }
+  h3 { font-size: 12pt; margin: 0.8em 0 0.3em; }
+  h4 { font-size: 11pt; margin: 0.8em 0 0.3em; }
+  p { margin: 0.5em 0; }
+  a { color: #2563eb; text-decoration: none; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.9em; }
+  pre { background: #f3f4f6; padding: 12px 16px; border-radius: 6px; overflow-x: auto; margin: 0.8em 0; border-left: 4px solid #d1d5db; }
+  pre code { background: none; padding: 0; font-size: 9pt; }
+  blockquote { margin: 0.8em 0; padding: 0.4em 1em; border-left: 4px solid #d1d5db; background: #f9fafb; color: #4b5563; }
+  table { width: 100%; border-collapse: collapse; margin: 0.8em 0; font-size: 10pt; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; }
+  th { background: #e2e8f0; font-weight: 600; }
+  tr:nth-child(even) { background: #f8fafc; }
+  ul, ol { margin: 0.4em 0; padding-left: 1.8em; }
+  li { margin: 0.15em 0; }
+  hr { margin: 1.5em 0; border: none; border-top: 1px solid #e5e7eb; }
+  img, svg { max-width: 100%; height: auto; }
+  .mermaid-diagram { text-align: center; margin: 1em 0; }
+  .mermaid-diagram svg { max-width: 100%; height: auto; }
+  .footer { margin-top: 2em; padding-top: 0.8em; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 8pt; text-align: center; }
+  @page { margin: 1.5cm; }
+</style>
+</head><body>
+  <div class="header">
+    <h1>${title.replace(/</g, '&lt;')}</h1>
+    <div class="meta">Exported ${new Date().toLocaleDateString()}</div>
+  </div>
+  ${html}
+  <div class="footer">Exported from LumaDesk &mdash; <a href="https://peerluma.com">peerluma.com</a></div>
+</body></html>`;
+
+    await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(styledHtml));
+
+    // Wait for images/content to load
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    const pdfData = await printWin.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+    });
+
+    printWin.close();
+    fs.writeFileSync(result.filePath, pdfData);
+    return { success: true, path: result.filePath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('get-recent-folder', () => {
   return currentRootDir;
 });
