@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LumaDesk</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Toolbar -->
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <button id="btn-open-folder" title="Open Folder (Ctrl+O)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Open Folder
+        </button>
+        <span id="folder-name" class="folder-label"></span>
+      </div>
+      <div class="toolbar-right">
+        <div class="filter-wrapper">
+          <button id="btn-filter" title="File type filter">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            <span id="filter-label">.md .txt</span>
+          </button>
+          <div id="filter-popover" class="popover" style="display:none;">
+            <label class="popover-label">File extensions (space-separated)</label>
+            <input id="filter-input" type="text" value=".md .txt" placeholder=".md .txt .markdown" />
+            <button id="btn-filter-apply" class="btn-primary btn-sm">Apply</button>
+          </div>
+        </div>
+        <button id="btn-export-word" title="Export to Word (Ctrl+E)" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Export Word
+        </button>
+      </div>
+    </header>
+
+    <div id="main">
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <div id="file-tree"></div>
+      </aside>
+
+      <!-- Resize handle -->
+      <div id="resize-handle"></div>
+
+      <!-- Preview -->
+      <main id="preview-container">
+        <div id="empty-state">
+          <div class="empty-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <h2>Welcome to LumaDesk</h2>
+          <p>Open a folder containing Markdown files to get started.</p>
+          <button id="btn-open-empty" class="btn-primary">Open Folder</button>
+        </div>
+        <div id="preview" class="markdown-body" style="display:none;"></div>
+      </main>
+    </div>
+
+    <!-- Mermaid fullscreen modal -->
+    <div id="mermaid-modal" style="display:none;">
+      <div class="modal-topbar">
+        <div class="modal-controls">
+          <span id="modal-zoom-level">100%</span>
+          <button id="modal-zoom-in" class="modal-btn">Zoom +</button>
+          <button id="modal-zoom-out" class="modal-btn">Zoom -</button>
+          <button id="modal-reset" class="modal-btn">Reset</button>
+        </div>
+        <button id="modal-close" class="modal-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="modal-canvas">
+        <div id="modal-diagram"></div>
+      </div>
+      <div class="modal-hint">Scroll to zoom &middot; Drag to pan &middot; Esc to close</div>
+    </div>
+
+    <!-- Status bar -->
+    <footer id="statusbar">
+      <span id="status-text">Ready</span>
+      <span id="status-file"></span>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
