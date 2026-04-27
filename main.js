@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const chokidar = require('chokidar');
@@ -47,6 +47,14 @@ ipcMain.handle('open-folder', async () => {
   return { path: dirPath, tree: scanDirectory(dirPath) };
 });
 
+ipcMain.handle('show-in-folder', async (_event, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { error: 'File not found' };
+  }
+  shell.showItemInFolder(filePath);
+  return { success: true };
+});
+
 ipcMain.handle('read-file', async (_event, filePath) => {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -77,7 +85,7 @@ ipcMain.handle('export-word', async (_event, { title, content, author }) => {
   }
 });
 
-ipcMain.handle('export-word-with-images', async (_event, { title, content, author, mermaidImages }) => {
+ipcMain.handle('export-word-with-images', async (_event, { title, content, author, mermaidImages, bodyFont, bodySize }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export as Word Document',
     defaultPath: `${sanitizeFilename(title)}.docx`,
@@ -86,7 +94,7 @@ ipcMain.handle('export-word-with-images', async (_event, { title, content, autho
   if (result.canceled) return { canceled: true };
 
   try {
-    await exportToWord({ title, content, author, savePath: result.filePath, mermaidImages });
+    await exportToWord({ title, content, author, savePath: result.filePath, mermaidImages, bodyFont, bodySize });
     return { success: true, path: result.filePath };
   } catch (err) {
     return { error: err.message };

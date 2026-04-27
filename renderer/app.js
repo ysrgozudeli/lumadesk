@@ -264,6 +264,10 @@ function renderFileItem(container, item, depth) {
     <span>${item.name}</span>
   `;
   fileEl.addEventListener('click', () => selectFile(item.path));
+  fileEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openFileContextMenu(e.clientX, e.clientY, item.path);
+  });
   container.appendChild(fileEl);
 }
 
@@ -300,6 +304,9 @@ async function selectFile(filePath) {
   previewEl.style.display = 'block';
   emptyState.style.display = 'none';
 
+  // Close any open search when switching files
+  if (searchBar.style.display !== 'none') closeSearch();
+
   // Render mermaid diagrams
   await renderMermaidBlocks();
 
@@ -311,6 +318,61 @@ async function selectFile(filePath) {
   // Scroll to top
   $('#preview-container').scrollTop = 0;
 }
+
+// ---- Word Export Settings (font/size for body text) ----
+const btnWordSettings = $('#btn-word-settings');
+const wordSettingsPopover = $('#word-settings-popover');
+const wordFontInput = $('#word-font-input');
+const wordSizeInput = $('#word-size-input');
+
+const WORD_SETTINGS_KEY = 'lumadesk.wordExportSettings';
+
+function loadWordSettings() {
+  try {
+    const raw = localStorage.getItem(WORD_SETTINGS_KEY);
+    if (!raw) return { font: '', size: '' };
+    const parsed = JSON.parse(raw);
+    return { font: parsed.font || '', size: parsed.size || '' };
+  } catch {
+    return { font: '', size: '' };
+  }
+}
+
+function saveWordSettings() {
+  const data = { font: wordFontInput.value.trim(), size: wordSizeInput.value.trim() };
+  localStorage.setItem(WORD_SETTINGS_KEY, JSON.stringify(data));
+}
+
+(function initWordSettings() {
+  const s = loadWordSettings();
+  wordFontInput.value = s.font;
+  wordSizeInput.value = s.size;
+})();
+
+btnWordSettings.addEventListener('click', (e) => {
+  e.stopPropagation();
+  wordSettingsPopover.style.display = wordSettingsPopover.style.display === 'none' ? 'block' : 'none';
+});
+
+document.addEventListener('click', (e) => {
+  if (!wordSettingsPopover.contains(e.target) && e.target !== btnWordSettings && !btnWordSettings.contains(e.target)) {
+    wordSettingsPopover.style.display = 'none';
+  }
+});
+
+wordFontInput.addEventListener('change', saveWordSettings);
+wordSizeInput.addEventListener('change', saveWordSettings);
+
+wordSettingsPopover.querySelectorAll('.preset-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    wordFontInput.value = btn.dataset.font || '';
+    wordSizeInput.value = btn.dataset.size || '';
+    saveWordSettings();
+    statusText.textContent = btn.dataset.font
+      ? `Word body: ${btn.dataset.font} ${btn.dataset.size}pt`
+      : 'Word body: default';
+  });
+});
 
 // ---- Word Export ----
 btnExportWord.addEventListener('click', async () => {
@@ -324,11 +386,14 @@ btnExportWord.addEventListener('click', async () => {
 
   statusText.textContent = 'Exporting to Word...';
 
+  const settings = loadWordSettings();
   const result = await window.lumadesk.exportWordWithImages({
     title: currentTitle,
     content: currentContent,
     author: '',
     mermaidImages,
+    bodyFont: settings.font || undefined,
+    bodySize: settings.size ? Number(settings.size) : undefined,
   });
 
   if (result.success) {
@@ -351,6 +416,10 @@ window.lumadesk.onFileChanged(async (filePath) => {
       const html = await window.lumadesk.renderMarkdown(result.content);
       previewEl.innerHTML = html;
       await renderMermaidBlocks();
+      // Re-apply active search after hot-reload
+      if (searchBar.style.display !== 'none' && searchInput.value) {
+        highlightSearch(searchInput.value);
+      }
       statusText.textContent = 'File updated';
     }
   }
@@ -393,10 +462,17 @@ btnExportPdf.addEventListener('click', async () => {
   statusText.textContent = 'Exporting to PDF...';
   btnExportPdf.disabled = true;
 
-  // Send the rendered HTML (including mermaid SVGs) for a clean document PDF
+  // Send the rendered HTML (including mermaid SVGs) for a clean document PDF.
+  // Strip search highlights from a clone so they don't leak into the exported PDF.
+  const clone = previewEl.cloneNode(true);
+  clone.querySelectorAll('mark.search-hit').forEach((m) => {
+    const parent = m.parentNode;
+    while (m.firstChild) parent.insertBefore(m.firstChild, m);
+    parent.removeChild(m);
+  });
   const result = await window.lumadesk.exportPdf({
     title: currentTitle,
-    html: previewEl.innerHTML,
+    html: clone.innerHTML,
   });
 
   if (result.success) {
@@ -498,6 +574,167 @@ previewEl.addEventListener('click', (e) => {
   }
 });
 
+// ---- Mermaid Playground ----
+const playgroundModal = $('#playground-modal');
+const playgroundInput = $('#playground-input');
+const playgroundCanvas = $('#playground-canvas');
+const playgroundDiagram = $('#playground-diagram');
+const playgroundStatus = $('#playground-status');
+const playgroundZoomLevel = $('#playground-zoom-level');
+const playgroundDivider = document.querySelector('.playground-divider');
+
+const PLAYGROUND_DEFAULT = `flowchart LR
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Do this]
+    B -->|No| D[Do that]
+    C --> E[End]
+    D --> E`;
+
+let pgScale = 1;
+let pgTranslate = { x: 0, y: 0 };
+let pgPanning = false;
+let pgLastMouse = { x: 0, y: 0 };
+let pgRenderTimer = null;
+
+function updatePlaygroundTransform() {
+  playgroundDiagram.style.transform = `translate(${pgTranslate.x}px, ${pgTranslate.y}px) scale(${pgScale})`;
+  playgroundZoomLevel.textContent = Math.round(pgScale * 100) + '%';
+}
+
+function resetPlaygroundView() {
+  pgScale = 1;
+  pgTranslate = { x: 0, y: 0 };
+  updatePlaygroundTransform();
+}
+
+async function renderPlayground() {
+  const source = playgroundInput.value.trim();
+
+  if (!source) {
+    playgroundDiagram.className = 'empty';
+    playgroundDiagram.textContent = 'Type or paste mermaid code to render';
+    playgroundStatus.textContent = 'Empty';
+    playgroundStatus.classList.remove('error');
+    return;
+  }
+
+  if (!mermaidReady) {
+    playgroundStatus.textContent = 'Loading...';
+    return;
+  }
+
+  playgroundStatus.textContent = 'Rendering...';
+  playgroundStatus.classList.remove('error');
+
+  try {
+    const id = 'pg-' + Math.random().toString(36).slice(2, 10);
+    const { svg } = await mermaidModule.default.render(id, source);
+    playgroundDiagram.className = '';
+    playgroundDiagram.innerHTML = svg;
+    playgroundStatus.textContent = 'OK';
+  } catch (err) {
+    playgroundDiagram.className = 'error';
+    playgroundDiagram.textContent = String(err?.message || err);
+    playgroundStatus.textContent = 'Error';
+    playgroundStatus.classList.add('error');
+  }
+}
+
+function schedulePlaygroundRender() {
+  clearTimeout(pgRenderTimer);
+  pgRenderTimer = setTimeout(renderPlayground, 250);
+}
+
+function openPlayground() {
+  playgroundModal.style.display = 'flex';
+  if (!playgroundInput.value) playgroundInput.value = PLAYGROUND_DEFAULT;
+  resetPlaygroundView();
+  renderPlayground();
+  setTimeout(() => playgroundInput.focus(), 0);
+}
+
+function closePlayground() {
+  playgroundModal.style.display = 'none';
+}
+
+playgroundInput.addEventListener('input', schedulePlaygroundRender);
+$('#btn-mermaid-playground').addEventListener('click', openPlayground);
+$('#playground-close').addEventListener('click', closePlayground);
+$('#playground-zoom-in').addEventListener('click', () => {
+  pgScale = Math.min(pgScale * 1.3, 8);
+  updatePlaygroundTransform();
+});
+$('#playground-zoom-out').addEventListener('click', () => {
+  pgScale = Math.max(pgScale * 0.7, 0.2);
+  updatePlaygroundTransform();
+});
+$('#playground-reset').addEventListener('click', resetPlaygroundView);
+
+playgroundCanvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  pgScale = Math.min(Math.max(pgScale * delta, 0.2), 8);
+  updatePlaygroundTransform();
+}, { passive: false });
+
+playgroundCanvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  pgPanning = true;
+  pgLastMouse = { x: e.clientX, y: e.clientY };
+  playgroundDiagram.style.transition = 'none';
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!pgPanning) return;
+  pgTranslate.x += e.clientX - pgLastMouse.x;
+  pgTranslate.y += e.clientY - pgLastMouse.y;
+  pgLastMouse = { x: e.clientX, y: e.clientY };
+  updatePlaygroundTransform();
+});
+
+document.addEventListener('mouseup', () => {
+  if (pgPanning) {
+    pgPanning = false;
+    playgroundDiagram.style.transition = 'transform 0.1s ease-out';
+  }
+});
+
+// Resizable divider between editor and canvas
+const playgroundEditor = document.querySelector('.playground-editor');
+let pgResizing = false;
+
+playgroundDivider.addEventListener('mousedown', (e) => {
+  pgResizing = true;
+  playgroundDivider.classList.add('active');
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!pgResizing) return;
+  const total = playgroundModal.clientWidth;
+  // Allow editor to shrink down to 0 (snap-collapse near the left edge)
+  // and canvas to keep at least 200px on the right
+  let w = Math.max(0, Math.min(e.clientX, total - 200));
+  if (w < 60) w = 0; // snap-collapse
+  playgroundEditor.style.width = w + 'px';
+  playgroundEditor.classList.toggle('collapsed', w === 0);
+});
+
+document.addEventListener('mouseup', () => {
+  if (pgResizing) {
+    pgResizing = false;
+    playgroundDivider.classList.remove('active');
+    document.body.style.userSelect = '';
+  }
+});
+
+// Double-click divider to toggle editor visibility
+playgroundDivider.addEventListener('dblclick', () => {
+  const collapsed = playgroundEditor.classList.toggle('collapsed');
+  playgroundEditor.style.width = collapsed ? '0px' : '40%';
+});
+
 // ---- File Filter ----
 const btnFilter = $('#btn-filter');
 const filterPopover = $('#filter-popover');
@@ -538,10 +775,221 @@ filterInput.addEventListener('keydown', (e) => {
   }
 })();
 
+// ---- File Context Menu ----
+const fileContextMenu = $('#file-context-menu');
+let contextMenuTargetPath = null;
+
+function openFileContextMenu(x, y, filePath) {
+  contextMenuTargetPath = filePath;
+  // Show first to measure, then clamp into viewport
+  fileContextMenu.style.display = 'block';
+  fileContextMenu.style.left = '0px';
+  fileContextMenu.style.top = '0px';
+  const rect = fileContextMenu.getBoundingClientRect();
+  const maxX = window.innerWidth - rect.width - 4;
+  const maxY = window.innerHeight - rect.height - 4;
+  fileContextMenu.style.left = Math.min(x, maxX) + 'px';
+  fileContextMenu.style.top = Math.min(y, maxY) + 'px';
+}
+
+function closeFileContextMenu() {
+  fileContextMenu.style.display = 'none';
+  contextMenuTargetPath = null;
+}
+
+fileContextMenu.addEventListener('click', async (e) => {
+  const item = e.target.closest('.context-menu-item');
+  if (!item) return;
+  const action = item.dataset.action;
+  const target = contextMenuTargetPath;
+  closeFileContextMenu();
+  if (action === 'show-in-folder' && target) {
+    const result = await window.lumadesk.showInFolder(target);
+    if (result?.error) statusText.textContent = `Error: ${result.error}`;
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (fileContextMenu.style.display !== 'none' && !fileContextMenu.contains(e.target)) {
+    closeFileContextMenu();
+  }
+});
+
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('.tree-file') && fileContextMenu.style.display !== 'none') {
+    closeFileContextMenu();
+  }
+});
+
+window.addEventListener('blur', closeFileContextMenu);
+window.addEventListener('resize', closeFileContextMenu);
+
+// ---- In-document Search ----
+const searchBar = $('#search-bar');
+const searchInput = $('#search-input');
+const searchCount = $('#search-count');
+const searchPrev = $('#search-prev');
+const searchNext = $('#search-next');
+const searchClose = $('#search-close');
+
+let searchHits = [];
+let searchIndex = -1;
+
+function clearSearchHighlights() {
+  const marks = previewEl.querySelectorAll('mark.search-hit');
+  marks.forEach((m) => {
+    const parent = m.parentNode;
+    while (m.firstChild) parent.insertBefore(m.firstChild, m);
+    parent.removeChild(m);
+    parent.normalize();
+  });
+  searchHits = [];
+  searchIndex = -1;
+}
+
+function highlightSearch(query) {
+  clearSearchHighlights();
+  if (!query) {
+    updateSearchUI();
+    return;
+  }
+
+  const lower = query.toLowerCase();
+  const walker = document.createTreeWalker(previewEl, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.toLowerCase().includes(lower)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      // Skip text inside mermaid SVGs, script, style
+      let p = node.parentNode;
+      while (p && p !== previewEl) {
+        if (p.classList && p.classList.contains('mermaid-diagram')) return NodeFilter.FILTER_REJECT;
+        const tag = p.nodeName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'MARK') return NodeFilter.FILTER_REJECT;
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  const textNodes = [];
+  let n;
+  while ((n = walker.nextNode())) textNodes.push(n);
+
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue;
+    const lowerText = text.toLowerCase();
+    const frag = document.createDocumentFragment();
+    let lastIdx = 0;
+    let idx = lowerText.indexOf(lower);
+    while (idx !== -1) {
+      if (idx > lastIdx) {
+        frag.appendChild(document.createTextNode(text.slice(lastIdx, idx)));
+      }
+      const mark = document.createElement('mark');
+      mark.className = 'search-hit';
+      mark.textContent = text.slice(idx, idx + query.length);
+      frag.appendChild(mark);
+      searchHits.push(mark);
+      lastIdx = idx + query.length;
+      idx = lowerText.indexOf(lower, lastIdx);
+    }
+    if (lastIdx < text.length) {
+      frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+    }
+    textNode.parentNode.replaceChild(frag, textNode);
+  }
+
+  if (searchHits.length > 0) {
+    searchIndex = 0;
+    focusCurrentHit();
+  }
+  updateSearchUI();
+}
+
+function focusCurrentHit() {
+  searchHits.forEach((m) => m.classList.remove('current'));
+  if (searchIndex >= 0 && searchIndex < searchHits.length) {
+    const current = searchHits[searchIndex];
+    current.classList.add('current');
+    current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+function updateSearchUI() {
+  const total = searchHits.length;
+  const pos = total === 0 ? 0 : searchIndex + 1;
+  searchCount.textContent = `${pos} / ${total}`;
+  searchPrev.disabled = total === 0;
+  searchNext.disabled = total === 0;
+}
+
+function nextHit() {
+  if (searchHits.length === 0) return;
+  searchIndex = (searchIndex + 1) % searchHits.length;
+  focusCurrentHit();
+  updateSearchUI();
+}
+
+function prevHit() {
+  if (searchHits.length === 0) return;
+  searchIndex = (searchIndex - 1 + searchHits.length) % searchHits.length;
+  focusCurrentHit();
+  updateSearchUI();
+}
+
+function openSearch() {
+  if (previewEl.style.display === 'none') return;
+  searchBar.style.display = 'flex';
+  searchInput.focus();
+  searchInput.select();
+  if (searchInput.value) highlightSearch(searchInput.value);
+}
+
+function closeSearch() {
+  searchBar.style.display = 'none';
+  clearSearchHighlights();
+  updateSearchUI();
+}
+
+searchInput.addEventListener('input', () => highlightSearch(searchInput.value));
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (e.shiftKey) prevHit();
+    else nextHit();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSearch();
+  }
+});
+searchNext.addEventListener('click', () => { nextHit(); searchInput.focus(); });
+searchPrev.addEventListener('click', () => { prevHit(); searchInput.focus(); });
+searchClose.addEventListener('click', closeSearch);
+
 // ---- Keyboard Shortcuts ----
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modal.style.display !== 'none') {
     closeMermaidModal();
+    return;
+  }
+  if (e.key === 'Escape' && fileContextMenu.style.display !== 'none') {
+    closeFileContextMenu();
+    return;
+  }
+  if (e.key === 'Escape' && playgroundModal.style.display !== 'none') {
+    closePlayground();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'm') {
+    e.preventDefault();
+    openPlayground();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    if (playgroundModal.style.display !== 'none') return;
+    e.preventDefault();
+    openSearch();
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') {

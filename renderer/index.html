@@ -29,9 +29,30 @@
             <button id="btn-filter-apply" class="btn-primary btn-sm">Apply</button>
           </div>
         </div>
-        <button id="btn-export-word" title="Export to Word (Ctrl+E)" disabled>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-          Word
+        <div class="word-wrapper">
+          <button id="btn-export-word" title="Export to Word (Ctrl+E)" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            Word
+          </button>
+          <button id="btn-word-settings" class="btn-chevron" title="Word export settings">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div id="word-settings-popover" class="popover" style="display:none;">
+            <label class="popover-label">Body font</label>
+            <input id="word-font-input" type="text" placeholder="(Word default)" />
+            <label class="popover-label" style="margin-top:8px;">Body size (pt)</label>
+            <input id="word-size-input" type="number" min="6" max="72" step="0.5" placeholder="(Word default)" />
+            <div class="popover-presets">
+              <button class="preset-btn" data-font="Arial" data-size="10">Arial 10</button>
+              <button class="preset-btn" data-font="Calibri" data-size="11">Calibri 11</button>
+              <button class="preset-btn" data-font="Times New Roman" data-size="12">Times 12</button>
+              <button class="preset-btn" data-font="" data-size="">Reset</button>
+            </div>
+          </div>
+        </div>
+        <button id="btn-mermaid-playground" title="Mermaid Playground (Ctrl+M)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="11" y2="15.5"/><line x1="15.5" y1="7.5" x2="13" y2="15.5"/></svg>
+          Playground
         </button>
         <button id="btn-export-pdf" title="Export to PDF (Ctrl+P)" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -51,6 +72,20 @@
 
       <!-- Preview -->
       <main id="preview-container">
+        <!-- In-document search bar -->
+        <div id="search-bar" style="display:none;">
+          <input id="search-input" type="text" placeholder="Find in document" />
+          <span id="search-count">0 / 0</span>
+          <button id="search-prev" class="search-btn" title="Previous (Shift+Enter)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+          </button>
+          <button id="search-next" class="search-btn" title="Next (Enter)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <button id="search-close" class="search-btn" title="Close (Esc)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
         <div id="empty-state">
           <div class="empty-icon">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -80,6 +115,41 @@
         <div id="modal-diagram"></div>
       </div>
       <div class="modal-hint">Scroll to zoom &middot; Drag to pan &middot; Esc to close</div>
+    </div>
+
+    <!-- Mermaid playground modal -->
+    <div id="playground-modal" style="display:none;">
+      <div class="playground-topbar">
+        <span class="playground-title">Mermaid Playground</span>
+        <div class="playground-controls">
+          <span id="playground-status">Ready</span>
+          <span id="playground-zoom-level">100%</span>
+          <button id="playground-zoom-in" class="modal-btn">Zoom +</button>
+          <button id="playground-zoom-out" class="modal-btn">Zoom -</button>
+          <button id="playground-reset" class="modal-btn">Reset</button>
+          <button id="playground-close" class="modal-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="playground-body">
+        <div class="playground-editor">
+          <textarea id="playground-input" spellcheck="false" placeholder="Paste mermaid code here..."></textarea>
+        </div>
+        <div class="playground-divider"></div>
+        <div id="playground-canvas" class="playground-canvas">
+          <div id="playground-diagram"></div>
+        </div>
+      </div>
+      <div class="modal-hint">Type to render &middot; Scroll to zoom &middot; Drag to pan &middot; Esc to close</div>
+    </div>
+
+    <!-- File context menu -->
+    <div id="file-context-menu" class="context-menu" style="display:none;">
+      <button class="context-menu-item" data-action="show-in-folder">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Show in folder
+      </button>
     </div>
 
     <!-- Status bar -->
