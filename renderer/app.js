@@ -312,6 +312,8 @@ async function selectFile(filePath) {
 
   btnExportWord.disabled = false;
   btnExportPdf.disabled = false;
+  btnExportPpt.disabled = false;
+  btnPresent.disabled = false;
   statusFile.textContent = filePath.split(/[/\\]/).pop();
   statusText.textContent = 'Ready';
 
@@ -324,22 +326,31 @@ const btnWordSettings = $('#btn-word-settings');
 const wordSettingsPopover = $('#word-settings-popover');
 const wordFontInput = $('#word-font-input');
 const wordSizeInput = $('#word-size-input');
+const wordMermaidSidecar = $('#word-mermaid-sidecar');
 
 const WORD_SETTINGS_KEY = 'lumadesk.wordExportSettings';
 
 function loadWordSettings() {
   try {
     const raw = localStorage.getItem(WORD_SETTINGS_KEY);
-    if (!raw) return { font: '', size: '' };
+    if (!raw) return { font: '', size: '', mermaidSidecar: true };
     const parsed = JSON.parse(raw);
-    return { font: parsed.font || '', size: parsed.size || '' };
+    return {
+      font: parsed.font || '',
+      size: parsed.size || '',
+      mermaidSidecar: parsed.mermaidSidecar !== false,
+    };
   } catch {
-    return { font: '', size: '' };
+    return { font: '', size: '', mermaidSidecar: true };
   }
 }
 
 function saveWordSettings() {
-  const data = { font: wordFontInput.value.trim(), size: wordSizeInput.value.trim() };
+  const data = {
+    font: wordFontInput.value.trim(),
+    size: wordSizeInput.value.trim(),
+    mermaidSidecar: wordMermaidSidecar.checked,
+  };
   localStorage.setItem(WORD_SETTINGS_KEY, JSON.stringify(data));
 }
 
@@ -347,6 +358,7 @@ function saveWordSettings() {
   const s = loadWordSettings();
   wordFontInput.value = s.font;
   wordSizeInput.value = s.size;
+  wordMermaidSidecar.checked = s.mermaidSidecar;
 })();
 
 btnWordSettings.addEventListener('click', (e) => {
@@ -362,6 +374,7 @@ document.addEventListener('click', (e) => {
 
 wordFontInput.addEventListener('change', saveWordSettings);
 wordSizeInput.addEventListener('change', saveWordSettings);
+wordMermaidSidecar.addEventListener('change', saveWordSettings);
 
 wordSettingsPopover.querySelectorAll('.preset-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -394,6 +407,7 @@ btnExportWord.addEventListener('click', async () => {
     mermaidImages,
     bodyFont: settings.font || undefined,
     bodySize: settings.size ? Number(settings.size) : undefined,
+    saveMermaidSidecar: settings.mermaidSidecar,
   });
 
   if (result.success) {
@@ -967,8 +981,231 @@ searchNext.addEventListener('click', () => { nextHit(); searchInput.focus(); });
 searchPrev.addEventListener('click', () => { prevHit(); searchInput.focus(); });
 searchClose.addEventListener('click', closeSearch);
 
+// ---- PPT Export ----
+const btnExportPpt = $('#btn-export-ppt');
+const btnPptSettings = $('#btn-ppt-settings');
+const pptSettingsPopover = $('#ppt-settings-popover');
+
+const PPT_SETTINGS_KEY = 'lumadesk.pptExportSettings';
+
+function loadPptSettings() {
+  try {
+    const raw = localStorage.getItem(PPT_SETTINGS_KEY);
+    if (!raw) return { theme: 'light' };
+    const parsed = JSON.parse(raw);
+    return { theme: ['light', 'dark', 'branded'].includes(parsed.theme) ? parsed.theme : 'light' };
+  } catch {
+    return { theme: 'light' };
+  }
+}
+
+function savePptSettings(theme) {
+  localStorage.setItem(PPT_SETTINGS_KEY, JSON.stringify({ theme }));
+}
+
+function refreshPptThemeButtons() {
+  const current = loadPptSettings().theme;
+  pptSettingsPopover.querySelectorAll('.ppt-theme-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.theme === current);
+  });
+}
+
+btnPptSettings.addEventListener('click', (e) => {
+  e.stopPropagation();
+  pptSettingsPopover.style.display = pptSettingsPopover.style.display === 'none' ? 'block' : 'none';
+  if (pptSettingsPopover.style.display === 'block') refreshPptThemeButtons();
+});
+
+document.addEventListener('click', (e) => {
+  if (!pptSettingsPopover.contains(e.target) && e.target !== btnPptSettings && !btnPptSettings.contains(e.target)) {
+    pptSettingsPopover.style.display = 'none';
+  }
+});
+
+pptSettingsPopover.querySelectorAll('.ppt-theme-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    savePptSettings(btn.dataset.theme);
+    refreshPptThemeButtons();
+    statusText.textContent = `PPT theme: ${btn.dataset.theme}`;
+  });
+});
+
+btnExportPpt.addEventListener('click', async () => {
+  if (!currentContent) return;
+
+  statusText.textContent = 'Rendering diagrams...';
+  btnExportPpt.disabled = true;
+
+  const mermaidImages = await captureMermaidImages(currentContent);
+  const { theme } = loadPptSettings();
+
+  statusText.textContent = `Building .pptx (${theme})...`;
+
+  try {
+    const buffer = await window.LumaPpt.exportToPptx({
+      title: currentTitle,
+      content: currentContent,
+      theme,
+      mermaidImages,
+    });
+    const result = await window.lumadesk.savePptx({
+      title: currentTitle,
+      buffer,
+    });
+    if (result.success) statusText.textContent = `Exported: ${result.path}`;
+    else if (result.error) statusText.textContent = `Export failed: ${result.error}`;
+    else statusText.textContent = 'Export cancelled';
+  } catch (err) {
+    statusText.textContent = `PPT failed: ${err.message || err}`;
+  }
+
+  btnExportPpt.disabled = false;
+});
+
+// ---- Presentation Mode ----
+const btnPresent = $('#btn-present');
+const presentOverlay = $('#present-overlay');
+const presentSlideEl = $('#present-slide');
+const presentCounter = $('#present-counter');
+const presentProgress = $('#present-progress');
+
+let presentSlides = [];
+let presentIndex = 0;
+
+function buildSlideMarkdown(slide) {
+  // Reconstruct a slide as markdown for the existing renderMarkdown IPC.
+  const parts = [];
+  if (slide.title) parts.push(`# ${slide.title}`);
+  if (slide.subtitle) parts.push(`## ${slide.subtitle}`);
+  if (slide.content) parts.push(slide.content);
+  return parts.join('\n\n');
+}
+
+async function renderCurrentSlide() {
+  if (!presentSlides.length) return;
+  const slide = presentSlides[presentIndex];
+  const md = buildSlideMarkdown(slide);
+  const html = await window.lumadesk.renderMarkdown(md);
+  presentSlideEl.innerHTML = html;
+  presentCounter.textContent = `${presentIndex + 1} / ${presentSlides.length}`;
+  const pct = ((presentIndex + 1) / presentSlides.length) * 100;
+  presentProgress.style.width = pct + '%';
+
+  // Render mermaid blocks in the slide
+  if (mermaidReady) {
+    const codeBlocks = presentSlideEl.querySelectorAll('code.language-mermaid, code[class*="language-mermaid"]');
+    for (const code of codeBlocks) {
+      const pre = code.parentElement;
+      const source = code.textContent;
+      try {
+        const id = 'pres-' + Math.random().toString(36).slice(2, 10);
+        const { svg } = await mermaidModule.default.render(id, source);
+        const container = document.createElement('div');
+        container.className = 'mermaid-diagram';
+        container.innerHTML = svg;
+        pre.replaceWith(container);
+      } catch {
+        // Leave the code block visible if mermaid fails — user still sees source
+      }
+    }
+  }
+
+  presentSlideEl.scrollTop = 0;
+}
+
+function presentNext() {
+  if (presentIndex < presentSlides.length - 1) {
+    presentIndex++;
+    renderCurrentSlide();
+  }
+}
+
+function presentPrev() {
+  if (presentIndex > 0) {
+    presentIndex--;
+    renderCurrentSlide();
+  }
+}
+
+function presentFirst() {
+  presentIndex = 0;
+  renderCurrentSlide();
+}
+
+function presentLast() {
+  presentIndex = presentSlides.length - 1;
+  renderCurrentSlide();
+}
+
+async function openPresent() {
+  if (!currentContent) return;
+  presentSlides = window.LumaSlides.parseSlides(currentContent);
+  if (!presentSlides.length) {
+    statusText.textContent = 'No slides parsed';
+    return;
+  }
+  presentIndex = 0;
+  presentOverlay.style.display = 'flex';
+  await renderCurrentSlide();
+}
+
+function closePresent() {
+  presentOverlay.style.display = 'none';
+  if (document.fullscreenElement) document.exitFullscreen();
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else presentOverlay.requestFullscreen?.();
+}
+
+btnPresent.addEventListener('click', openPresent);
+$('#present-prev').addEventListener('click', presentPrev);
+$('#present-next').addEventListener('click', presentNext);
+$('#present-fullscreen').addEventListener('click', toggleFullscreen);
+$('#present-close').addEventListener('click', closePresent);
+
+// Scroll-wheel navigation: scroll within the slide first; only switch
+// slides when the slide is at the edge in the wheel direction. Debounced
+// so trackpad inertia doesn't blast through multiple slides at the edge.
+let wheelLockUntil = 0;
+presentOverlay.addEventListener('wheel', (e) => {
+  if (presentOverlay.style.display === 'none') return;
+  if (Math.abs(e.deltaY) < 10) return;
+
+  const s = presentSlideEl;
+  const atTop = s.scrollTop <= 0;
+  const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
+  const goingDown = e.deltaY > 0;
+
+  // If the slide can still scroll in this direction, let the browser do it.
+  if (goingDown && !atBottom) return;
+  if (!goingDown && !atTop) return;
+
+  // At the edge — navigate, with debounce.
+  e.preventDefault();
+  const now = performance.now();
+  if (now < wheelLockUntil) return;
+  wheelLockUntil = now + 350;
+  if (goingDown) presentNext();
+  else presentPrev();
+}, { passive: false });
+
 // ---- Keyboard Shortcuts ----
 document.addEventListener('keydown', (e) => {
+  // Presentation mode owns most keys when open
+  if (presentOverlay.style.display !== 'none') {
+    if (e.key === 'Escape') { e.preventDefault(); closePresent(); return; }
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+      if (e.key === ' ' && e.shiftKey) { e.preventDefault(); presentPrev(); return; }
+      e.preventDefault(); presentNext(); return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); presentPrev(); return; }
+    if (e.key === 'Home') { e.preventDefault(); presentFirst(); return; }
+    if (e.key === 'End') { e.preventDefault(); presentLast(); return; }
+    if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFullscreen(); return; }
+  }
+
   if (e.key === 'Escape' && modal.style.display !== 'none') {
     closeMermaidModal();
     return;
@@ -1003,5 +1240,9 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
     e.preventDefault();
     if (!btnExportPdf.disabled) btnExportPdf.click();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
+    e.preventDefault();
+    if (!btnPresent.disabled) openPresent();
   }
 });

@@ -91,17 +91,39 @@ body {
   position: relative;
 }
 
-.word-wrapper {
+.word-wrapper,
+.ppt-wrapper {
   position: relative;
   display: flex;
   align-items: stretch;
   gap: 0;
 }
 
-.word-wrapper #btn-export-word {
+.word-wrapper #btn-export-word,
+.ppt-wrapper #btn-export-ppt {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
   border-right: none;
+}
+
+.popover-hint {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.popover-hint code {
+  background: var(--bg-alt);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.ppt-theme-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
 }
 
 #toolbar .btn-chevron {
@@ -137,6 +159,24 @@ body {
 .preset-btn:hover {
   background: var(--bg-hover);
   border-color: var(--text-dim);
+}
+
+.popover-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.popover-checkbox input {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
 }
 
 .popover {
@@ -588,6 +628,190 @@ body {
 
 .mermaid-diagram:hover::after {
   opacity: 1;
+}
+
+/* ---- Presentation Mode ---- */
+#present-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #0b0b0f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+#present-stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 60px 80px;
+  box-sizing: border-box;
+}
+
+#present-slide {
+  width: 100%;
+  max-width: 1280px;
+  aspect-ratio: 16 / 9;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  padding: 56px 72px;
+  overflow: auto;
+  font-size: 22px;
+  line-height: 1.5;
+}
+
+#present-slide h1 {
+  font-size: 44px;
+  margin-bottom: 24px;
+  color: #1a1a1a;
+}
+
+#present-slide h2 {
+  font-size: 32px;
+  margin-bottom: 18px;
+  color: #1a1a1a;
+}
+
+#present-slide h3 {
+  font-size: 26px;
+  margin-bottom: 14px;
+}
+
+#present-slide p {
+  margin-bottom: 16px;
+}
+
+#present-slide ul,
+#present-slide ol {
+  margin-left: 32px;
+  margin-bottom: 16px;
+}
+
+#present-slide li {
+  margin-bottom: 8px;
+}
+
+#present-slide code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: Consolas, monospace;
+  font-size: 0.9em;
+}
+
+#present-slide pre {
+  background: #1e1e1e;
+  color: #e5e7eb;
+  padding: 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 16px;
+  font-size: 16px;
+}
+
+#present-slide pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+#present-slide table {
+  border-collapse: collapse;
+  margin-bottom: 16px;
+  width: 100%;
+}
+
+#present-slide th,
+#present-slide td {
+  border: 1px solid #e5e7eb;
+  padding: 8px 12px;
+}
+
+#present-slide th {
+  background: #f3f4f6;
+}
+
+#present-slide blockquote {
+  border-left: 4px solid #6b7280;
+  padding-left: 16px;
+  color: #6b7280;
+  font-style: italic;
+  margin-bottom: 16px;
+}
+
+#present-slide .mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+#present-slide .mermaid-diagram svg {
+  max-width: 100%;
+  max-height: 60vh;
+  height: auto;
+}
+
+#present-toolbar {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+}
+
+.present-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+}
+
+.present-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+}
+
+#present-counter {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  min-width: 60px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.present-spacer {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 6px;
+}
+
+#present-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  background: var(--primary);
+  width: 0%;
+  transition: width 0.2s ease-out;
 }
 
 /* ---- Mermaid Playground Modal ---- */

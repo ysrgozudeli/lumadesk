@@ -48,8 +48,34 @@
               <button class="preset-btn" data-font="Times New Roman" data-size="12">Times 12</button>
               <button class="preset-btn" data-font="" data-size="">Reset</button>
             </div>
+            <label class="popover-checkbox">
+              <input id="word-mermaid-sidecar" type="checkbox" checked />
+              <span>Save mermaid sources as .txt sidecar</span>
+            </label>
           </div>
         </div>
+        <div class="ppt-wrapper">
+          <button id="btn-export-ppt" title="Export to PowerPoint" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            PPT
+          </button>
+          <button id="btn-ppt-settings" class="btn-chevron" title="PPT theme">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div id="ppt-settings-popover" class="popover" style="display:none;">
+            <label class="popover-label">Theme</label>
+            <div class="popover-presets">
+              <button class="preset-btn ppt-theme-btn" data-theme="light">Light</button>
+              <button class="preset-btn ppt-theme-btn" data-theme="dark">Dark</button>
+              <button class="preset-btn ppt-theme-btn" data-theme="branded">Branded</button>
+            </div>
+            <p class="popover-hint">Slides split by <code>---</code> or <code># SLIDE N -- Title</code>. Falls back to <code>#</code>/<code>##</code> headings.</p>
+          </div>
+        </div>
+        <button id="btn-present" title="Present (Ctrl+Shift+Enter)" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Present
+        </button>
         <button id="btn-mermaid-playground" title="Mermaid Playground (Ctrl+M)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="11" y2="15.5"/><line x1="15.5" y1="7.5" x2="13" y2="15.5"/></svg>
           Playground
@@ -117,6 +143,30 @@
       <div class="modal-hint">Scroll to zoom &middot; Drag to pan &middot; Esc to close</div>
     </div>
 
+    <!-- Presentation mode overlay -->
+    <div id="present-overlay" style="display:none;">
+      <div id="present-stage">
+        <div id="present-slide" class="markdown-body"></div>
+      </div>
+      <div id="present-toolbar">
+        <button id="present-prev" class="present-btn" title="Previous (←)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span id="present-counter">1 / 1</span>
+        <button id="present-next" class="present-btn" title="Next (→)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <span class="present-spacer"></span>
+        <button id="present-fullscreen" class="present-btn" title="Toggle fullscreen (F)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+        </button>
+        <button id="present-close" class="present-btn" title="Exit (Esc)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="present-progress"></div>
+    </div>
+
     <!-- Mermaid playground modal -->
     <div id="playground-modal" style="display:none;">
       <div class="playground-topbar">
@@ -159,6 +209,9 @@
     </footer>
   </div>
 
+  <script src="../node_modules/pptxgenjs/dist/pptxgen.bundle.js"></script>
+  <script src="slides.js"></script>
+  <script src="pptExport.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

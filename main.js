@@ -85,7 +85,7 @@ ipcMain.handle('export-word', async (_event, { title, content, author }) => {
   }
 });
 
-ipcMain.handle('export-word-with-images', async (_event, { title, content, author, mermaidImages, bodyFont, bodySize }) => {
+ipcMain.handle('export-word-with-images', async (_event, { title, content, author, mermaidImages, bodyFont, bodySize, saveMermaidSidecar }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export as Word Document',
     defaultPath: `${sanitizeFilename(title)}.docx`,
@@ -94,7 +94,23 @@ ipcMain.handle('export-word-with-images', async (_event, { title, content, autho
   if (result.canceled) return { canceled: true };
 
   try {
-    await exportToWord({ title, content, author, savePath: result.filePath, mermaidImages, bodyFont, bodySize });
+    await exportToWord({ title, content, author, savePath: result.filePath, mermaidImages, bodyFont, bodySize, saveMermaidSidecar });
+    return { success: true, path: result.filePath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('save-pptx', async (_event, { title, buffer }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export as PowerPoint',
+    defaultPath: `${sanitizeFilename(title)}.pptx`,
+    filters: [{ name: 'PowerPoint Presentation', extensions: ['pptx'] }],
+  });
+  if (result.canceled) return { canceled: true };
+
+  try {
+    fs.writeFileSync(result.filePath, Buffer.from(buffer));
     return { success: true, path: result.filePath };
   } catch (err) {
     return { error: err.message };
