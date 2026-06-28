@@ -1,0 +1,66 @@
+name: Build distributions
+
+# Build native installers for Windows, macOS and Linux with electron-builder.
+#
+# - Push a tag like `v1.0.0` -> builds on all three OSes AND publishes them to a (draft)
+#   GitHub Release for that tag.
+# - Run manually (Actions tab -> "Build distributions" -> Run workflow) -> builds and
+#   uploads the installers as workflow artifacts (no release).
+#
+# electron-builder builds the host OS's targets, so each platform runs on its own runner.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed for electron-builder to create the Release
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No signing certs in CI -> don't attempt macOS code signing.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            npx electron-builder --publish always
+          else
+            npx electron-builder --publish never
+          fi
+
+      - name: Upload artifacts (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumadesk-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: ignore
