@@ -64,9 +64,15 @@ ipcMain.handle('read-file', async (_event, filePath) => {
   }
 });
 
+// Strip a leading YAML frontmatter block (--- ... ---) so Marp/Jekyll metadata
+// doesn't get rendered as visible content at the top of the preview/PDF.
+function stripFrontmatter(markdown) {
+  return markdown.replace(/^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
+}
+
 ipcMain.handle('render-markdown', async (_event, markdown) => {
   const { marked } = await import('marked');
-  return marked.parse(markdown, { async: false });
+  return marked.parse(stripFrontmatter(markdown), { async: false });
 });
 
 ipcMain.handle('export-word', async (_event, { title, content, author }) => {
@@ -117,7 +123,7 @@ ipcMain.handle('save-pptx', async (_event, { title, buffer }) => {
   }
 });
 
-ipcMain.handle('export-pdf', async (_event, { title, html }) => {
+ipcMain.handle('export-pdf', async (_event, { title, html, slides }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export as PDF',
     defaultPath: `${sanitizeFilename(title)}.pdf`,
@@ -136,6 +142,19 @@ ipcMain.handle('export-pdf', async (_event, { title, html }) => {
         contextIsolation: true,
       },
     });
+
+    // Slide decks: one slide per page (break at each "---" -> <hr>), landscape,
+    // and no injected header/footer so the deck's own cover leads page 1.
+    const slideCss = slides ? `
+  hr { break-after: page; page-break-after: always; border: 0; height: 0; margin: 0; visibility: hidden; }
+  body > *:last-child { page-break-after: auto; }
+  @page { margin: 1.5cm; }
+` : `  @page { margin: 1.5cm; }`;
+    const headerHtml = slides ? '' : `  <div class="header">
+    <h1>${title.replace(/</g, '&lt;')}</h1>
+    <div class="meta">Exported ${new Date().toLocaleDateString()}</div>
+  </div>`;
+    const footerHtml = slides ? '' : `  <div class="footer">Exported from LumaDesk &mdash; <a href="https://peerluma.com">peerluma.com</a></div>`;
 
     const styledHtml = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>${title}</title>
@@ -170,15 +189,12 @@ ipcMain.handle('export-pdf', async (_event, { title, html }) => {
   .mermaid-diagram { text-align: center; margin: 1em 0; }
   .mermaid-diagram svg { max-width: 100%; height: auto; }
   .footer { margin-top: 2em; padding-top: 0.8em; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 8pt; text-align: center; }
-  @page { margin: 1.5cm; }
+${slideCss}
 </style>
 </head><body>
-  <div class="header">
-    <h1>${title.replace(/</g, '&lt;')}</h1>
-    <div class="meta">Exported ${new Date().toLocaleDateString()}</div>
-  </div>
+${headerHtml}
   ${html}
-  <div class="footer">Exported from LumaDesk &mdash; <a href="https://peerluma.com">peerluma.com</a></div>
+${footerHtml}
 </body></html>`;
 
     await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(styledHtml));

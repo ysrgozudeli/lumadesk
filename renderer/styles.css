@@ -500,6 +500,17 @@ body {
   height: auto;
 }
 
+.svg-diagram {
+  margin: 1em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.svg-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ---- Status bar ---- */
 #statusbar {
   height: var(--statusbar-height);
@@ -598,7 +609,8 @@ body {
   pointer-events: none;
 }
 
-.mermaid-diagram {
+.mermaid-diagram,
+.svg-diagram {
   position: relative;
   cursor: pointer;
   border: 1px solid transparent;
@@ -606,12 +618,14 @@ body {
   transition: border-color 0.15s, background 0.15s;
 }
 
-.mermaid-diagram:hover {
+.mermaid-diagram:hover,
+.svg-diagram:hover {
   border-color: var(--primary);
   background: var(--bg-alt);
 }
 
-.mermaid-diagram::after {
+.mermaid-diagram::after,
+.svg-diagram::after {
   content: 'Click to expand';
   position: absolute;
   top: 8px;
@@ -626,7 +640,8 @@ body {
   pointer-events: none;
 }
 
-.mermaid-diagram:hover::after {
+.mermaid-diagram:hover::after,
+.svg-diagram:hover::after {
   opacity: 1;
 }
 

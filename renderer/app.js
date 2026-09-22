@@ -1,3 +1,30 @@
+// ---- SVG Support ----
+async function renderSvgBlocks() {
+  const codeBlocks = previewEl.querySelectorAll('code.language-svg, code[class*="language-svg"]');
+  for (const code of codeBlocks) {
+    const pre = code.parentElement;
+    const source = code.textContent.trim();
+    try {
+      // Parse SVG string and validate it's valid XML
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(source, 'image/svg+xml');
+
+      // Check for parsing errors
+      if (svgDoc.getElementsByTagName('parsererror').length > 0) {
+        throw new Error('Invalid SVG syntax');
+      }
+
+      const container = document.createElement('div');
+      container.className = 'svg-diagram';
+      container.innerHTML = source;
+      pre.replaceWith(container);
+    } catch (e) {
+      console.warn('SVG render error:', e);
+      // Keep the code block visible if SVG rendering fails
+    }
+  }
+}
+
 // ---- Mermaid ----
 let mermaidReady = false;
 let mermaidModule = null;
@@ -35,6 +62,89 @@ async function renderMermaidBlocks() {
       console.warn('Mermaid render error:', e);
     }
   }
+}
+
+/**
+ * Capture all SVG blocks as PNG data URLs for Word export.
+ * Returns an object mapping source text → { dataUrl, width, height }
+ */
+async function captureSvgImages(markdown) {
+  const images = {};
+
+  // Extract SVG blocks from markdown
+  const regex = /```\s*svg\s*\n([\s\S]*?)```/g;
+  let match;
+  const sources = [];
+  while ((match = regex.exec(markdown)) !== null) {
+    sources.push(match[1].trim());
+  }
+  if (sources.length === 0) return images;
+
+  for (const source of sources) {
+    try {
+      // Parse and validate SVG
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(source, 'image/svg+xml');
+
+      if (svgDoc.getElementsByTagName('parsererror').length > 0) {
+        console.warn('Invalid SVG in export:', source.slice(0, 50));
+        continue;
+      }
+
+      const svgEl = svgDoc.querySelector('svg');
+      if (!svgEl) continue;
+
+      // Get dimensions
+      let svgWidth, svgHeight;
+      const viewBox = svgEl.getAttribute('viewBox');
+      if (viewBox) {
+        const parts = viewBox.split(/[\s,]+/).map(Number);
+        if (parts.length === 4) {
+          svgWidth = parts[2];
+          svgHeight = parts[3];
+        }
+      }
+      if (!svgWidth) svgWidth = parseFloat(svgEl.getAttribute('width')) || 600;
+      if (!svgHeight) svgHeight = parseFloat(svgEl.getAttribute('height')) || 400;
+
+      // Set explicit dimensions
+      svgEl.setAttribute('width', String(svgWidth));
+      svgEl.setAttribute('height', String(svgHeight));
+      const fixedSvg = new XMLSerializer().serializeToString(svgEl);
+
+      // Convert SVG to PNG
+      const svgBase64 = btoa(unescape(encodeURIComponent(fixedSvg)));
+      const svgDataUrl = 'data:image/svg+xml;base64,' + svgBase64;
+
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = svgDataUrl;
+      });
+
+      const scale = 3;
+      const canvas = document.createElement('canvas');
+      canvas.width = svgWidth * scale;
+      canvas.height = svgHeight * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, svgWidth, svgHeight);
+
+      const dataUrl = canvas.toDataURL('image/png');
+      images[source] = {
+        dataUrl,
+        width: svgWidth,
+        height: svgHeight,
+      };
+    } catch (e) {
+      console.warn('SVG capture error:', e);
+    }
+  }
+
+  return images;
 }
 
 /**
@@ -307,7 +417,8 @@ async function selectFile(filePath) {
   // Close any open search when switching files
   if (searchBar.style.display !== 'none') closeSearch();
 
-  // Render mermaid diagrams
+  // Render SVG and mermaid diagrams
+  await renderSvgBlocks();
   await renderMermaidBlocks();
 
   btnExportWord.disabled = false;
@@ -394,7 +505,8 @@ btnExportWord.addEventListener('click', async () => {
   statusText.textContent = 'Rendering diagrams...';
   btnExportWord.disabled = true;
 
-  // Capture mermaid diagrams as PNG for embedding in Word
+  // Capture SVG and mermaid diagrams as PNG for embedding in Word
+  const svgImages = await captureSvgImages(currentContent);
   const mermaidImages = await captureMermaidImages(currentContent);
 
   statusText.textContent = 'Exporting to Word...';
@@ -405,6 +517,7 @@ btnExportWord.addEventListener('click', async () => {
     content: currentContent,
     author: '',
     mermaidImages,
+    svgImages,
     bodyFont: settings.font || undefined,
     bodySize: settings.size ? Number(settings.size) : undefined,
     saveMermaidSidecar: settings.mermaidSidecar,
@@ -429,6 +542,7 @@ window.lumadesk.onFileChanged(async (filePath) => {
       currentContent = result.content;
       const html = await window.lumadesk.renderMarkdown(result.content);
       previewEl.innerHTML = html;
+      await renderSvgBlocks();
       await renderMermaidBlocks();
       // Re-apply active search after hot-reload
       if (searchBar.style.display !== 'none' && searchInput.value) {
@@ -470,6 +584,17 @@ document.addEventListener('mouseup', () => {
 // ---- PDF Export ----
 const btnExportPdf = $('#btn-export-pdf');
 
+// A doc is a slide deck only on an explicit signal: Marp "marp: true"
+// frontmatter or "# SLIDE N --" markers. Bare "---" lines are NOT used —
+// they are ordinary horizontal rules in normal documents.
+function isSlideDeck(md) {
+  if (!md) return false;
+  const fmMatch = md.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/);
+  if (fmMatch && /^\s*marp\s*:\s*true\s*$/m.test(fmMatch[1])) return true;
+  if (/^#\s+SLIDE\s+\d+\s*--/m.test(md)) return true;
+  return false;
+}
+
 btnExportPdf.addEventListener('click', async () => {
   if (!currentContent) return;
 
@@ -487,6 +612,7 @@ btnExportPdf.addEventListener('click', async () => {
   const result = await window.lumadesk.exportPdf({
     title: currentTitle,
     html: clone.innerHTML,
+    slides: isSlideDeck(currentContent),
   });
 
   if (result.success) {
@@ -580,9 +706,9 @@ document.addEventListener('mouseup', () => {
   }
 });
 
-// Click on mermaid diagram in preview → open modal
+// Click on mermaid/svg diagram in preview → open modal
 previewEl.addEventListener('click', (e) => {
-  const diagram = e.target.closest('.mermaid-diagram');
+  const diagram = e.target.closest('.mermaid-diagram, .svg-diagram');
   if (diagram) {
     openMermaidModal(diagram.innerHTML);
   }
