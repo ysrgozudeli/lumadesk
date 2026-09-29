@@ -15,6 +15,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           Open Folder
         </button>
+        <button id="btn-open-file" title="Open File (Ctrl+Shift+O)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Open File
+        </button>
         <span id="folder-name" class="folder-label"></span>
       </div>
       <div class="toolbar-right">
@@ -117,8 +121,11 @@
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           </div>
           <h2>Welcome to LumaDesk</h2>
-          <p>Open a folder containing Markdown files to get started.</p>
-          <button id="btn-open-empty" class="btn-primary">Open Folder</button>
+          <p>Open a folder of Markdown files, or a single file, to get started.</p>
+          <div class="empty-actions">
+            <button id="btn-open-empty" class="btn-primary">Open Folder</button>
+            <button id="btn-open-file-empty" class="btn-secondary">Open File</button>
+          </div>
         </div>
         <div id="preview" class="markdown-body" style="display:none;"></div>
       </main>
