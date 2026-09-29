@@ -70,9 +70,45 @@ function stripFrontmatter(markdown) {
   return markdown.replace(/^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
 }
 
+// GitHub-style heading slug: lowercase, drop punctuation (keep letters,
+// numbers, spaces, hyphens), spaces → hyphens. Matches the anchors that
+// Table-of-Contents links like [Overview](#overview) point at.
+function githubSlug(text) {
+  return String(text)
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '') // strip punctuation (apostrophes, colons, etc.)
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+
 ipcMain.handle('render-markdown', async (_event, markdown) => {
-  const { marked } = await import('marked');
-  return marked.parse(stripFrontmatter(markdown), { async: false });
+  const { Marked } = await import('marked');
+
+  // marked v17 doesn't emit heading `id` attributes by default, so in-page
+  // TOC anchor links have nothing to jump to. Add GitHub-style slug ids,
+  // de-duplicated the same way GitHub does (append -1, -2, ...). Use a fresh
+  // Marked instance per call so the slug counter doesn't leak between renders.
+  const used = new Map();
+  const md = new Marked({
+    renderer: {
+      heading({ tokens, depth }) {
+        const text = this.parser.parseInline(tokens);
+        const raw = tokens.map((t) => t.raw || t.text || '').join('');
+        let slug = githubSlug(raw);
+        if (used.has(slug)) {
+          const n = used.get(slug) + 1;
+          used.set(slug, n);
+          slug = `${slug}-${n}`;
+        } else {
+          used.set(slug, 0);
+        }
+        return `<h${depth} id="${slug}">${text}</h${depth}>\n`;
+      },
+    },
+  });
+
+  return md.parse(stripFrontmatter(markdown), { async: false });
 });
 
 ipcMain.handle('export-word', async (_event, { title, content, author }) => {
