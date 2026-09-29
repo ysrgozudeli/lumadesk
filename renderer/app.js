@@ -714,6 +714,24 @@ previewEl.addEventListener('click', (e) => {
   }
 });
 
+// In-page anchor links (Table of Contents) → smooth-scroll to the heading.
+// Handled explicitly because the preview scrolls inside #preview-container,
+// and we want smooth scrolling without pushing a hash onto the URL.
+previewEl.addEventListener('click', (e) => {
+  const link = e.target.closest('a[href^="#"]');
+  if (!link) return;
+  const id = decodeURIComponent(link.getAttribute('href').slice(1));
+  if (!id) return;
+  // Match by id, or by name attribute as a fallback.
+  const target =
+    previewEl.querySelector(`#${CSS.escape(id)}`) ||
+    previewEl.querySelector(`[name="${CSS.escape(id)}"]`);
+  if (target) {
+    e.preventDefault();
+    target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+});
+
 // ---- Mermaid Playground ----
 const playgroundModal = $('#playground-modal');
 const playgroundInput = $('#playground-input');
