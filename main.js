@@ -47,6 +47,35 @@ ipcMain.handle('open-folder', async () => {
   return { path: dirPath, tree: scanDirectory(dirPath) };
 });
 
+ipcMain.handle('open-file', async () => {
+  const exts = fileExtensions.map(e => e.replace(/^\./, ''));
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    title: 'Open File',
+    filters: [
+      { name: 'Documents', extensions: exts.length ? exts : ['md', 'txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    // Single-file mode: no folder tree, but still watch this file for
+    // live auto-refresh on save.
+    currentRootDir = null;
+    setupFileWatcher(filePath);
+    return {
+      path: filePath,
+      content,
+      fileName: path.basename(filePath).replace(/\.[^.]+$/, ''),
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('show-in-folder', async (_event, filePath) => {
   if (!filePath || !fs.existsSync(filePath)) {
     return { error: 'File not found' };
@@ -347,6 +376,20 @@ function setupWatcher(dirPath) {
   watcher.on('unlink', () => notifyTreeChange());
   watcher.on('addDir', () => notifyTreeChange());
   watcher.on('unlinkDir', () => notifyTreeChange());
+}
+
+// Watch a single file (single-file open mode) for live refresh on save.
+function setupFileWatcher(filePath) {
+  if (watcher) watcher.close();
+
+  watcher = chokidar.watch(filePath, {
+    persistent: true,
+    ignoreInitial: true,
+  });
+
+  watcher.on('change', () => {
+    if (mainWindow) mainWindow.webContents.send('file-changed', filePath);
+  });
 }
 
 let treeChangeTimeout;

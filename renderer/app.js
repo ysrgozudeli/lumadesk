@@ -244,6 +244,8 @@ let currentTitle = '';
 const $ = (sel) => document.querySelector(sel);
 const btnOpenFolder = $('#btn-open-folder');
 const btnOpenEmpty = $('#btn-open-empty');
+const btnOpenFile = $('#btn-open-file');
+const btnOpenFileEmpty = $('#btn-open-file-empty');
 const btnExportWord = $('#btn-export-word');
 const fileTreeEl = $('#file-tree');
 const previewEl = $('#preview');
@@ -273,6 +275,27 @@ async function openFolder() {
 
 btnOpenFolder.addEventListener('click', openFolder);
 btnOpenEmpty.addEventListener('click', openFolder);
+
+// ---- Open Single File ----
+async function openSingleFile() {
+  const result = await window.lumadesk.openFile();
+  if (!result) return;
+  if (result.error) {
+    statusText.textContent = `Error: ${result.error}`;
+    return;
+  }
+
+  // Single-file mode: show just this file in the sidebar so it stays
+  // visible and selectable, then render it via the shared select path.
+  currentTree = [{ type: 'file', name: result.fileName, path: result.path }];
+  folderName.textContent = result.path.split(/[/\\]/).pop();
+  renderTree(currentTree);
+  await selectFile(result.path);
+  statusText.textContent = `Opened: ${result.path}`;
+}
+
+btnOpenFile.addEventListener('click', openSingleFile);
+btnOpenFileEmpty.addEventListener('click', openSingleFile);
 
 // ---- File Tree ----
 function renderTree(tree, depth = 0) {
@@ -1375,7 +1398,8 @@ document.addEventListener('keydown', (e) => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
     e.preventDefault();
-    openFolder();
+    if (e.shiftKey) openSingleFile();
+    else openFolder();
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
     e.preventDefault();
