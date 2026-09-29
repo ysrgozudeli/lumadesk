@@ -1253,7 +1253,10 @@ async function renderCurrentSlide() {
   const slide = presentSlides[presentIndex];
   const md = buildSlideMarkdown(slide);
   const html = await window.lumadesk.renderMarkdown(md);
-  presentSlideEl.innerHTML = html;
+  // Wrap in a <section> so the deck's own CSS (section, section.lead,
+  // section.divider, ...) applies just like Marp.
+  const cls = slide.sectionClass ? ` class="${slide.sectionClass}"` : '';
+  presentSlideEl.innerHTML = `<section${cls}>${html}</section>`;
   presentCounter.textContent = `${presentIndex + 1} / ${presentSlides.length}`;
   const pct = ((presentIndex + 1) / presentSlides.length) * 100;
   presentProgress.style.width = pct + '%';
@@ -1271,6 +1274,7 @@ async function renderCurrentSlide() {
         container.className = 'mermaid-diagram';
         container.innerHTML = svg;
         pre.replaceWith(container);
+        hardenDiagramColors(container);
       } catch {
         // Leave the code block visible if mermaid fails — user still sees source
       }
@@ -1278,6 +1282,29 @@ async function renderCurrentSlide() {
   }
 
   presentSlideEl.scrollTop = 0;
+}
+
+// A slide's injected deck <style> may include broad rules like
+// `section span { color: ... !important }`. Mermaid renders flowchart labels
+// as HTML spans inside the SVG, so those rules can override the diagram's own
+// (non-important) label colors and make text unreadable (e.g. white-on-dark
+// nodes turning dark-on-dark). Re-assert Mermaid's own colors with !important
+// so they win the cascade again.
+function hardenDiagramColors(container) {
+  // 1. Bump declarations in the SVG's internal <style> to !important.
+  container.querySelectorAll('svg style').forEach((styleEl) => {
+    styleEl.textContent = styleEl.textContent.replace(
+      /([\w-]+)\s*:\s*([^;{}!]+?)\s*(!important)?\s*;/g,
+      (m, prop, val, imp) => (imp ? m : `${prop}:${val} !important;`)
+    );
+  });
+  // 2. Re-apply any inline label colors as !important so they beat the deck.
+  container.querySelectorAll('svg [style]').forEach((el) => {
+    const color = el.style.color;
+    const bg = el.style.backgroundColor;
+    if (color) el.style.setProperty('color', color, 'important');
+    if (bg) el.style.setProperty('background-color', bg, 'important');
+  });
 }
 
 function presentNext() {
@@ -1304,13 +1331,30 @@ function presentLast() {
   renderCurrentSlide();
 }
 
+function injectDeckStyle(css) {
+  let el = document.getElementById('present-deck-style');
+  if (!css) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'present-deck-style';
+    document.head.appendChild(el);
+  }
+  el.textContent = css;
+}
+
 async function openPresent() {
   if (!currentContent) return;
-  presentSlides = window.LumaSlides.parseSlides(currentContent);
+  const deck = window.LumaSlides.parseDeck(currentContent);
+  presentSlides = deck.slides;
   if (!presentSlides.length) {
     statusText.textContent = 'No slides parsed';
     return;
   }
+  // Apply the deck's own <style> so the presentation matches its design.
+  injectDeckStyle(deck.style);
   presentIndex = 0;
   presentOverlay.style.display = 'flex';
   await renderCurrentSlide();
@@ -1318,6 +1362,7 @@ async function openPresent() {
 
 function closePresent() {
   presentOverlay.style.display = 'none';
+  injectDeckStyle(''); // remove deck CSS so it doesn't bleed into the app
   if (document.fullscreenElement) document.exitFullscreen();
 }
 

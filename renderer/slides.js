@@ -1,11 +1,82 @@
 // Slide parser shared by PPT export and Presentation mode.
-// Convention 1 (preferred): "# SLIDE N -- Title" markers
+// Convention 0 (Marp): frontmatter "marp: true" or "---" slide separators
+// Convention 1: "# SLIDE N -- Title" markers
 // Convention 2 (fallback): split on h1 headings, or h2 if only one h1
 //
-// Exposes: window.LumaSlides.parseSlides(markdown) -> [{ title, subtitle?, content }]
+// Exposes:
+//   window.LumaSlides.parseSlides(markdown) -> [{ title, subtitle?, content, sectionClass? }]
+//   window.LumaSlides.parseDeck(markdown)   -> { slides, style }
 (function () {
   function cleanBreaks(text) {
     return text.replace(/^(\*{3,}|-{3,})$/gm, '').trim();
+  }
+
+  function stripFrontmatter(md) {
+    return md.replace(/^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '');
+  }
+
+  // A deck is Marp/slide-separated when it declares marp:true in frontmatter
+  // or uses standalone "---" lines as slide breaks.
+  function isMarpDeck(md) {
+    const fm = md.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/);
+    if (fm && /^\s*marp\s*:\s*true\s*$/m.test(fm[1])) return true;
+    // Count standalone "---" separators in the body (after any frontmatter).
+    const body = stripFrontmatter(md);
+    const seps = body.match(/^[ \t]*---[ \t]*$/gm);
+    return !!seps && seps.length >= 1;
+  }
+
+  // Split a Marp deck on "---" separators. Each chunk becomes one slide,
+  // keeping its markdown body intact (code blocks, tables, HTML spans).
+  function parseMarpDeck(markdown) {
+    const noFm = stripFrontmatter(markdown);
+
+    // Pull out any <style> block(s) so they can be applied to the whole deck
+    // instead of being rendered as literal CSS text on the first slide.
+    let style = '';
+    const body = noFm.replace(/<style[\s\S]*?<\/style>/gi, (m) => {
+      style += m.replace(/^<style[^>]*>/i, '').replace(/<\/style>\s*$/i, '') + '\n';
+      return '';
+    });
+
+    const chunks = body.split(/^[ \t]*---[ \t]*$/m);
+    const slides = [];
+
+    for (const rawChunk of chunks) {
+      // Capture a Marp per-slide directive (<!-- _class: lead -->) then drop
+      // all HTML comments from the content.
+      const classMatch = rawChunk.match(/<!--\s*_class:\s*([^>]+?)\s*-->/);
+      const sectionClass = classMatch ? classMatch[1].trim() : undefined;
+      const chunk = rawChunk.replace(/<!--[\s\S]*?-->/g, '').trim();
+      if (!chunk) continue;
+
+      const lines = chunk.split('\n');
+      let title = '';
+      let subtitle;
+      let titleTaken = false;
+      let subtitleTaken = false;
+      const bodyLines = [];
+
+      for (const line of lines) {
+        const h1 = line.match(/^#\s+(.+)$/);
+        const h2 = line.match(/^##\s+(.+)$/);
+        if (!titleTaken && h1) { title = h1[1].trim(); titleTaken = true; continue; }
+        if (!titleTaken && h2) { title = h2[1].trim(); titleTaken = true; continue; }
+        if (titleTaken && !subtitleTaken && !bodyLines.some((l) => l.trim()) && h2) {
+          subtitle = h2[1].trim(); subtitleTaken = true; continue;
+        }
+        bodyLines.push(line);
+      }
+
+      slides.push({
+        title: title || 'Slide',
+        subtitle,
+        content: bodyLines.join('\n').trim(),
+        sectionClass,
+      });
+    }
+
+    return { slides, style };
   }
 
   function parseSlidesFromHeadings(markdown) {
@@ -93,6 +164,11 @@
   }
 
   function parseSlides(markdown) {
+    // Marp / "---"-separated decks: honour the author's slide boundaries.
+    if (isMarpDeck(markdown)) {
+      return parseMarpDeck(markdown).slides;
+    }
+
     const slideRegex = /^#\s+SLIDE\s+\d+\s*--\s*(.+)$/gm;
     const matches = [];
     let match;
@@ -142,5 +218,11 @@
     return slides;
   }
 
-  window.LumaSlides = { parseSlides, parseSlidesFromHeadings };
+  // Full deck info (slides + extracted <style>) for Presentation mode.
+  function parseDeck(markdown) {
+    if (isMarpDeck(markdown)) return parseMarpDeck(markdown);
+    return { slides: parseSlides(markdown), style: '' };
+  }
+
+  window.LumaSlides = { parseSlides, parseSlidesFromHeadings, parseDeck };
 })();

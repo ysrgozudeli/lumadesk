@@ -697,10 +697,20 @@ body {
   background: white;
   border-radius: 6px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-  padding: 56px 72px;
+  padding: 0;
   overflow: auto;
   font-size: 22px;
   line-height: 1.5;
+}
+
+/* Each slide is wrapped in a <section> so a Marp deck's own CSS applies.
+   Padding lives here (not on #present-slide) so a deck's section{padding}
+   can override it; non-styled decks fall back to this default. */
+#present-slide > section {
+  display: block;
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 56px 72px;
 }
 
 #present-slide h1 {
