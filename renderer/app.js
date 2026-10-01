@@ -60,8 +60,25 @@ async function renderMermaidBlocks() {
       pre.replaceWith(container);
     } catch (e) {
       console.warn('Mermaid render error:', e);
+      showDiagramError(pre, source, e);
     }
   }
+}
+
+// Replace a failed diagram's <pre> with a visible error box (message +
+// collapsible source) instead of silently leaving raw code, so a bad
+// diagram explains itself (e.g. a stray ";" in a sequence message).
+function showDiagramError(pre, source, err) {
+  const box = document.createElement('div');
+  box.className = 'diagram-error';
+  box.innerHTML =
+    '<div class="diagram-error-title">⚠ Diagram failed to render</div>' +
+    '<pre class="diagram-error-msg"></pre>' +
+    '<details><summary>Show diagram source</summary><pre class="diagram-error-src"></pre></details>';
+  box.querySelector('.diagram-error-msg').textContent =
+    (err && err.message) ? err.message : String(err);
+  box.querySelector('.diagram-error-src').textContent = source;
+  pre.replaceWith(box);
 }
 
 /**
@@ -1275,8 +1292,9 @@ async function renderCurrentSlide() {
         container.innerHTML = svg;
         pre.replaceWith(container);
         hardenDiagramColors(container);
-      } catch {
-        // Leave the code block visible if mermaid fails — user still sees source
+      } catch (e) {
+        console.warn('Mermaid render error (present):', e);
+        showDiagramError(pre, source, e);
       }
     }
   }
