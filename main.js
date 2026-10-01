@@ -122,9 +122,18 @@ ipcMain.handle('render-markdown', async (_event, markdown) => {
   const md = new Marked({
     renderer: {
       heading({ tokens, depth }) {
-        const text = this.parser.parseInline(tokens);
+        let text = this.parser.parseInline(tokens);
         const raw = tokens.map((t) => t.raw || t.text || '').join('');
-        let slug = githubSlug(raw);
+        // Honor a Pandoc explicit id ({#my-id}) so TOC links that target it
+        // work and the literal {#...} isn't shown; else fall back to a slug.
+        const pandoc = raw.match(/\{#([^}]+)\}\s*$/);
+        let slug;
+        if (pandoc) {
+          slug = pandoc[1].trim();
+          text = text.replace(/\s*\{#[^}]+\}\s*$/, '');
+        } else {
+          slug = githubSlug(raw);
+        }
         if (used.has(slug)) {
           const n = used.get(slug) + 1;
           used.set(slug, n);
