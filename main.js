@@ -76,6 +76,22 @@ ipcMain.handle('open-file', async () => {
   }
 });
 
+// Paths we just wrote ourselves — used to suppress the watcher's own
+// 'file-changed' echo so saving from the in-app editor doesn't reload and
+// clobber the user's cursor/scroll.
+const selfWrites = new Map();
+
+ipcMain.handle('write-file', async (_event, { path: filePath, content }) => {
+  if (!filePath) return { error: 'No file path' };
+  try {
+    selfWrites.set(filePath, Date.now());
+    fs.writeFileSync(filePath, content, 'utf-8');
+    return { success: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('show-in-folder', async (_event, filePath) => {
   if (!filePath || !fs.existsSync(filePath)) {
     return { error: 'File not found' };
@@ -301,9 +317,13 @@ ipcMain.handle('rescan-folder', async () => {
 // Search the open folder by file name and file contents. Returns a flat list
 // of matching files; each with any name match flagged and up to a few matching
 // content lines (with line numbers) for preview/jump-to.
-ipcMain.handle('search-folder', async (_event, query) => {
-  const q = String(query || '').trim().toLowerCase();
-  if (!currentRootDir || !q) return { results: [] };
+ipcMain.handle('search-folder', async (_event, options) => {
+  // Back-compat: a bare string means "search names and content".
+  const opts = typeof options === 'string' ? { query: options } : (options || {});
+  const q = String(opts.query || '').trim().toLowerCase();
+  const matchName = opts.matchName !== false;
+  const matchContent = opts.matchContent !== false;
+  if (!currentRootDir || !q || (!matchName && !matchContent)) return { results: [] };
 
   const MAX_RESULTS = 500;
   const MAX_SNIPPETS = 5;
@@ -324,23 +344,25 @@ ipcMain.handle('search-folder', async (_event, query) => {
     for (const file of files) {
       if (results.length >= MAX_RESULTS) return;
       const full = path.join(dir, file.name);
-      const nameMatch = file.name.toLowerCase().includes(q);
+      const nameMatch = matchName && file.name.toLowerCase().includes(q);
 
       const snippets = [];
       let totalContentMatches = 0;
-      try {
-        const content = fs.readFileSync(full, 'utf-8');
-        const lines = content.split(/\r?\n/);
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].toLowerCase().includes(q)) {
-            totalContentMatches++;
-            if (snippets.length < MAX_SNIPPETS) {
-              snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
+      if (matchContent) {
+        try {
+          const content = fs.readFileSync(full, 'utf-8');
+          const lines = content.split(/\r?\n/);
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].toLowerCase().includes(q)) {
+              totalContentMatches++;
+              if (snippets.length < MAX_SNIPPETS) {
+                snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
+              }
             }
           }
+        } catch {
+          // Unreadable file — name match (if any) still counts.
         }
-      } catch {
-        // Unreadable file — name match (if any) still counts.
       }
 
       if (nameMatch || totalContentMatches > 0) {
@@ -443,6 +465,7 @@ function setupWatcher(dirPath) {
   });
 
   watcher.on('change', (filePath) => {
+    if (isSelfWrite(filePath)) return;
     if (fileExtensions.some(ext => filePath.endsWith(ext)) && mainWindow) {
       mainWindow.webContents.send('file-changed', filePath);
     }
@@ -464,8 +487,18 @@ function setupFileWatcher(filePath) {
   });
 
   watcher.on('change', () => {
+    if (isSelfWrite(filePath)) return;
     if (mainWindow) mainWindow.webContents.send('file-changed', filePath);
   });
+}
+
+// True if we wrote this path within the last couple of seconds (own-save echo).
+function isSelfWrite(filePath) {
+  const ts = selfWrites.get(filePath);
+  if (ts == null) return false;
+  if (Date.now() - ts < 2000) return true;
+  selfWrites.delete(filePath);
+  return false;
 }
 
 let treeChangeTimeout;

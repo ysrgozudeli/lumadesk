@@ -283,7 +283,7 @@ async function openFolder() {
   renderTree(result.tree);
   // Folder mode: enable the sidebar file/content search.
   clearFolderSearch();
-  $('#sidebar-search').style.display = 'flex';
+  $('#sidebar-search-wrap').style.display = 'block';
   statusText.textContent = `Opened: ${result.path}`;
 
   // Auto-select first file
@@ -312,7 +312,7 @@ async function openSingleFile() {
   renderTree(currentTree);
   // Single-file mode: no folder to search across.
   clearFolderSearch();
-  $('#sidebar-search').style.display = 'none';
+  $('#sidebar-search-wrap').style.display = 'none';
   await selectFile(result.path);
   statusText.textContent = `Opened: ${result.path}`;
 }
@@ -440,6 +440,11 @@ function findFirstFile(tree) {
 
 // ---- Select & Preview File ----
 async function selectFile(filePath) {
+  // Guard unsaved edits when switching files.
+  if (editorState.active && editorState.dirty && filePath !== currentFilePath) {
+    if (!confirm('You have unsaved changes. Discard them and switch files?')) return;
+  }
+
   // Update active state in tree
   document.querySelectorAll('.tree-file.active').forEach(el => el.classList.remove('active'));
   const fileEl = document.querySelector(`.tree-file[data-path="${CSS.escape(filePath)}"]`);
@@ -471,11 +476,25 @@ async function selectFile(filePath) {
   btnExportPdf.disabled = false;
   btnExportPpt.disabled = false;
   btnPresent.disabled = false;
+  btnEdit.disabled = false;
   statusFile.textContent = filePath.split(/[/\\]/).pop();
   statusText.textContent = 'Ready';
 
   // Scroll to top
   $('#preview-container').scrollTop = 0;
+  previewPane.scrollTop = 0;
+
+  // If editing, load the newly selected file into the editor too.
+  if (editorState.active) {
+    editorTextarea.value = currentContent;
+    editorState.fm = '';
+    if (editorState.mode === 'wysiwyg') {
+      const { fm, body } = splitFrontmatter(currentContent);
+      editorState.fm = fm;
+      await renderWysiwygFromMarkdown(body);
+    }
+    setEditorDirty(false);
+  }
 
   // If this file was opened from a folder-search content result, re-apply the
   // query as an in-document highlight and jump to the first hit.
@@ -592,6 +611,11 @@ btnExportWord.addEventListener('click', async () => {
 
 // ---- File Watcher ----
 window.lumadesk.onFileChanged(async (filePath) => {
+  // Don't hot-reload over an open edit session (would discard the user's work).
+  if (editorState.active && filePath === currentFilePath) {
+    statusText.textContent = 'File changed on disk — not reloaded while editing';
+    return;
+  }
   if (filePath === currentFilePath) {
     const result = await window.lumadesk.readFile(filePath);
     if (!result.error) {
@@ -1189,6 +1213,11 @@ const folderSearchResults = $('#folder-search-results');
 let folderSearchTimer = null;
 // Query to re-apply as an in-document highlight after a content result opens.
 let pendingPreviewHighlight = '';
+// Search mode: match file names OR file contents (one at a time).
+let searchMode = 'content';
+// Keyboard navigation over the flat list of clickable result rows.
+let searchNavEls = [];
+let searchNavIndex = -1;
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => (
@@ -1222,6 +1251,8 @@ function clearFolderSearch() {
   folderSearchInput.value = '';
   folderSearchClear.style.display = 'none';
   folderSearchResults.innerHTML = '';
+  searchNavEls = [];
+  searchNavIndex = -1;
   showFolderSearchResults(false);
 }
 
@@ -1235,57 +1266,89 @@ async function runFolderSearch(query) {
     return;
   }
 
-  const { results, truncated } = await window.lumadesk.searchFolder(q);
+  const { results, truncated } = await window.lumadesk.searchFolder({
+    query: q,
+    matchName: searchMode === 'name',
+    matchContent: searchMode === 'content',
+  });
   renderFolderSearchResults(results || [], q, truncated);
 }
 
 function renderFolderSearchResults(results, query, truncated) {
   showFolderSearchResults(true);
+  searchNavIndex = -1;
 
   if (results.length === 0) {
-    folderSearchResults.innerHTML = '<div class="search-empty">No matches found</div>';
+    folderSearchResults.innerHTML =
+      `<div class="search-empty">No ${searchMode === 'name' ? 'file names' : 'content'} match &ldquo;${escapeHtml(query)}&rdquo;</div>`;
+    searchNavEls = [];
     return;
   }
 
   const fileCount = results.length;
-  const matchCount = results.reduce((n, r) => n + r.totalContentMatches, 0);
-  let html = `<div class="search-summary">${fileCount} file${fileCount === 1 ? '' : 's'} &middot; ${matchCount} content match${matchCount === 1 ? '' : 'es'}${truncated ? ' (showing first 500)' : ''}</div>`;
+  let summary;
+  if (searchMode === 'name') {
+    summary = `${fileCount} file${fileCount === 1 ? '' : 's'}`;
+  } else {
+    const matchCount = results.reduce((n, r) => n + r.totalContentMatches, 0);
+    summary = `${matchCount} match${matchCount === 1 ? '' : 'es'} in ${fileCount} file${fileCount === 1 ? '' : 's'}`;
+  }
+  if (truncated) summary += ' (first 500)';
+
+  let html = `<div class="search-summary">${summary}</div>`;
 
   for (const r of results) {
     const active = r.path === currentFilePath ? ' active' : '';
-    html += `<div class="search-result${active}" data-path="${escapeHtml(r.path)}">`;
-    html += `<div class="search-result-file">`;
+    // In name mode the whole file row is the clickable nav target; in content
+    // mode each snippet is its own target (jumps to that line's term).
+    const fileNav = searchMode === 'name' ? ' data-nav="1"' : '';
+    html += `<div class="search-result${active}">`;
+    html += `<div class="search-result-file" data-path="${escapeHtml(r.path)}"${fileNav}>`;
     html += `<svg class="tree-file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
-    html += `<span class="search-result-name">${r.nameMatch ? highlightSnippet(r.name, query) : escapeHtml(r.name)}</span>`;
-    if (r.totalContentMatches > 0) {
+    html += `<span class="search-result-name">${(r.nameMatch && searchMode === 'name') ? highlightSnippet(r.name, query) : escapeHtml(r.name)}</span>`;
+    if (searchMode === 'content' && r.totalContentMatches > 0) {
       html += `<span class="search-result-count">${r.totalContentMatches}</span>`;
     }
     html += `</div>`;
-    for (const sn of r.snippets) {
-      html += `<div class="search-result-snippet" data-path="${escapeHtml(r.path)}" data-query="${escapeHtml(query)}"><span class="snippet-line">${sn.line}</span><span class="snippet-text">${highlightSnippet(sn.text, query)}</span></div>`;
-    }
-    if (r.totalContentMatches > r.snippets.length) {
-      html += `<div class="search-result-more">+${r.totalContentMatches - r.snippets.length} more</div>`;
+    if (searchMode === 'content') {
+      for (const sn of r.snippets) {
+        html += `<div class="search-result-snippet" data-path="${escapeHtml(r.path)}" data-query="${escapeHtml(query)}" data-nav="1"><span class="snippet-line">${sn.line}</span><span class="snippet-text">${highlightSnippet(sn.text, query)}</span></div>`;
+      }
+      if (r.totalContentMatches > r.snippets.length) {
+        html += `<div class="search-result-more">+${r.totalContentMatches - r.snippets.length} more in this file</div>`;
+      }
     }
     html += `</div>`;
   }
 
   folderSearchResults.innerHTML = html;
+  searchNavEls = Array.from(folderSearchResults.querySelectorAll('[data-nav="1"]'));
+}
+
+function setSearchNav(index) {
+  if (!searchNavEls.length) return;
+  searchNavIndex = (index + searchNavEls.length) % searchNavEls.length;
+  searchNavEls.forEach((el, i) => el.classList.toggle('nav-active', i === searchNavIndex));
+  searchNavEls[searchNavIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function openNavEl(el) {
+  if (!el) return;
+  const filePath = el.dataset.path;
+  const query = el.dataset.query || folderSearchInput.value.trim();
+  if (filePath) openSearchResult(filePath, query);
 }
 
 // Open a result: load the file, then (for content matches) re-highlight the
 // query in the preview via the in-document search bar and jump to the first hit.
 async function openSearchResult(filePath, query) {
-  pendingPreviewHighlight = query || '';
+  pendingPreviewHighlight = (searchMode === 'content') ? (query || '') : '';
   await selectFile(filePath);
 }
 
 folderSearchResults.addEventListener('click', (e) => {
-  const el = e.target.closest('.search-result-snippet, .search-result');
-  if (!el) return;
-  const filePath = el.dataset.path;
-  const query = el.dataset.query || folderSearchInput.value.trim();
-  if (filePath) openSearchResult(filePath, query);
+  const el = e.target.closest('[data-path]');
+  if (el) openNavEl(el);
 });
 
 folderSearchInput.addEventListener('input', () => {
@@ -1298,6 +1361,19 @@ folderSearchInput.addEventListener('keydown', (e) => {
     e.preventDefault();
     clearFolderSearch();
     folderSearchInput.blur();
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    setSearchNav(searchNavIndex + 1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    setSearchNav(searchNavIndex - 1);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    openNavEl(searchNavIndex >= 0 ? searchNavEls[searchNavIndex] : searchNavEls[0]);
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // Ctrl+←/→ flips between Name and Content modes.
+    e.preventDefault();
+    setSearchMode(searchMode === 'name' ? 'content' : 'name');
   }
 });
 
@@ -1305,6 +1381,25 @@ folderSearchClear.addEventListener('click', () => {
   clearFolderSearch();
   folderSearchInput.focus();
 });
+
+// Single-select scope: Name OR Content.
+function setSearchMode(mode) {
+  if (mode !== 'name' && mode !== 'content') return;
+  searchMode = mode;
+  document.querySelectorAll('#search-scope .scope-btn').forEach((b) =>
+    b.classList.toggle('active', b.dataset.scope === mode));
+  folderSearchInput.placeholder = mode === 'name' ? 'Search file names…' : 'Search in file contents…';
+  runFolderSearch(folderSearchInput.value);
+  folderSearchInput.focus();
+}
+
+$('#search-scope').addEventListener('click', (e) => {
+  const btn = e.target.closest('.scope-btn');
+  if (btn) setSearchMode(btn.dataset.scope);
+});
+
+// Apply the default mode's placeholder/active state on load.
+setSearchMode(searchMode);
 
 // ---- PPT Export ----
 const btnExportPpt = $('#btn-export-ppt');
@@ -1562,6 +1657,421 @@ presentOverlay.addEventListener('wheel', (e) => {
   else presentPrev();
 }, { passive: false });
 
+// ---- Document Editor (split edit mode) ----
+const btnEdit = $('#btn-edit');
+const previewContainer = $('#preview-container');
+const previewPane = $('#preview-pane');
+const editorDivider = $('#editor-divider');
+const editorPane = $('#editor-pane');
+const editorToolbar = $('#editor-toolbar');
+const editorTextarea = $('#editor-textarea');
+const editorWysiwyg = $('#editor-wysiwyg');
+const editorSaveBtn = $('#editor-save');
+const editorDirtyDot = $('#editor-dirty');
+const editorModeSwitch = $('#editor-mode-switch');
+
+const editorState = { active: false, mode: 'text', dirty: false, fm: '' };
+let editorSyncTimer = null;
+
+function setEditorDirty(d) {
+  editorState.dirty = d;
+  editorDirtyDot.style.display = d ? 'inline' : 'none';
+}
+
+// Split a leading YAML frontmatter block off so WYSIWYG mode can preserve it
+// verbatim (marked strips it from the rendered body).
+function splitFrontmatter(md) {
+  const m = md.match(/^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/);
+  if (m) return { fm: m[0].replace(/\s+$/, ''), body: md.slice(m[0].length) };
+  return { fm: '', body: md };
+}
+
+// Current editor contents as Markdown, from whichever mode is active.
+function getEditorMarkdown() {
+  if (editorState.mode === 'wysiwyg') {
+    let md = htmlToMarkdown(editorWysiwyg);
+    if (editorState.fm) md = editorState.fm + '\n' + md;
+    return md;
+  }
+  return editorTextarea.value;
+}
+
+// Re-render the top (read-only) preview from the live editor content.
+async function renderTopPreview(md) {
+  const html = await window.lumadesk.renderMarkdown(md);
+  previewEl.innerHTML = html;
+  await renderSvgBlocks();
+  await renderMermaidBlocks();
+  if (searchBar.style.display !== 'none' && searchInput.value) {
+    highlightSearch(searchInput.value);
+  }
+}
+
+function scheduleEditorSync() {
+  clearTimeout(editorSyncTimer);
+  editorSyncTimer = setTimeout(() => renderTopPreview(getEditorMarkdown()), 300);
+}
+
+function markEditorDirty() {
+  if (!editorState.dirty) setEditorDirty(true);
+}
+
+// Render Markdown into the contenteditable WYSIWYG surface, turning mermaid/svg
+// code blocks into rendered (non-editable) diagrams so they're easy to read.
+async function renderWysiwygFromMarkdown(body) {
+  const html = await window.lumadesk.renderMarkdown(body);
+  editorWysiwyg.innerHTML = html;
+  await renderEditorDiagrams(editorWysiwyg);
+}
+
+async function renderEditorDiagrams(scope) {
+  if (mermaidReady) {
+    const blocks = scope.querySelectorAll('code.language-mermaid, code[class*="language-mermaid"], code[class*="language- mermaid"]');
+    for (const code of blocks) {
+      const pre = code.parentElement;
+      const source = code.textContent;
+      try {
+        const id = 'edm-' + Math.random().toString(36).slice(2, 10);
+        const { svg } = await mermaidModule.default.render(id, source);
+        const c = document.createElement('div');
+        c.className = 'mermaid-diagram';
+        c.setAttribute('contenteditable', 'false');
+        c.dataset.src = source.replace(/\n+$/, '');
+        c.innerHTML = svg;
+        pre.replaceWith(c);
+      } catch (e) {
+        console.warn('Editor mermaid render error:', e);
+      }
+    }
+  }
+  const svgBlocks = scope.querySelectorAll('code.language-svg, code[class*="language-svg"]');
+  for (const code of svgBlocks) {
+    const pre = code.parentElement;
+    const source = code.textContent.trim();
+    const c = document.createElement('div');
+    c.className = 'svg-diagram';
+    c.setAttribute('contenteditable', 'false');
+    c.dataset.src = source;
+    c.innerHTML = source;
+    pre.replaceWith(c);
+  }
+}
+
+// ---- HTML → Markdown (for WYSIWYG mode) ----
+function htmlToMarkdown(root) {
+  const parts = [];
+  root.childNodes.forEach((n) => {
+    const block = serializeBlock(n);
+    if (block.trim() !== '') parts.push(block);
+  });
+  return parts.join('\n\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
+function serializeInline(node) {
+  let out = '';
+  node.childNodes.forEach((n) => {
+    if (n.nodeType === 3) { out += n.nodeValue; return; }
+    if (n.nodeType !== 1) return;
+    const tag = n.nodeName.toLowerCase();
+    const inner = serializeInline(n);
+    switch (tag) {
+      case 'strong': case 'b': out += inner.trim() ? '**' + inner + '**' : ''; break;
+      case 'em': case 'i': out += inner.trim() ? '*' + inner + '*' : ''; break;
+      case 'del': case 's': case 'strike': out += '~~' + inner + '~~'; break;
+      case 'code': out += '`' + n.textContent + '`'; break;
+      case 'a': out += '[' + inner + '](' + (n.getAttribute('href') || '') + ')'; break;
+      case 'br': out += '  \n'; break;
+      case 'img': out += '![' + (n.getAttribute('alt') || '') + '](' + (n.getAttribute('src') || '') + ')'; break;
+      default: out += inner;
+    }
+  });
+  return out;
+}
+
+function serializeBlock(node) {
+  if (node.nodeType === 3) return node.nodeValue.trim();
+  if (node.nodeType !== 1) return '';
+  const el = node;
+  const tag = el.nodeName.toLowerCase();
+
+  // Rendered diagrams carry their original source.
+  if (el.classList && el.classList.contains('mermaid-diagram') && el.dataset.src != null) {
+    return '```mermaid\n' + el.dataset.src + '\n```';
+  }
+  if (el.classList && el.classList.contains('svg-diagram') && el.dataset.src != null) {
+    return '```svg\n' + el.dataset.src + '\n```';
+  }
+
+  switch (tag) {
+    case 'h1': return '# ' + serializeInline(el);
+    case 'h2': return '## ' + serializeInline(el);
+    case 'h3': return '### ' + serializeInline(el);
+    case 'h4': return '#### ' + serializeInline(el);
+    case 'h5': return '##### ' + serializeInline(el);
+    case 'h6': return '###### ' + serializeInline(el);
+    case 'p': return serializeInline(el);
+    case 'hr': return '---';
+    case 'blockquote': {
+      const inner = Array.from(el.childNodes).map((c) => serializeBlock(c)).filter(Boolean).join('\n\n');
+      return inner.split('\n').map((l) => (l ? '> ' + l : '>')).join('\n');
+    }
+    case 'pre': {
+      const code = el.querySelector('code');
+      const text = (code ? code.textContent : el.textContent).replace(/\n$/, '');
+      const m = code && code.className.match(/language-([\w-]+)/);
+      return '```' + (m ? m[1] : '') + '\n' + text + '\n```';
+    }
+    case 'ul': return serializeList(el, false, '');
+    case 'ol': return serializeList(el, true, '');
+    case 'table': return serializeTable(el);
+    case 'div': case 'section': case 'article':
+      return Array.from(el.childNodes).map((c) => serializeBlock(c)).filter(Boolean).join('\n\n');
+    default: return serializeInline(el);
+  }
+}
+
+function serializeList(el, ordered, indent) {
+  const lines = [];
+  let i = 1;
+  Array.from(el.children).forEach((li) => {
+    if (li.nodeName.toLowerCase() !== 'li') return;
+    const marker = ordered ? (i++) + '. ' : '- ';
+    let inline = '';
+    li.childNodes.forEach((n) => {
+      if (n.nodeType === 1 && (n.nodeName === 'UL' || n.nodeName === 'OL')) return;
+      if (n.nodeType === 3) inline += n.nodeValue;
+      else if (n.nodeType === 1) inline += serializeInline(n);
+    });
+    lines.push(indent + marker + inline.trim());
+    Array.from(li.children).forEach((ch) => {
+      const t = ch.nodeName.toLowerCase();
+      if (t === 'ul') lines.push(serializeList(ch, false, indent + '  '));
+      if (t === 'ol') lines.push(serializeList(ch, true, indent + '  '));
+    });
+  });
+  return lines.join('\n');
+}
+
+function serializeTable(table) {
+  let head = Array.from(table.querySelectorAll('thead th, thead td')).map((c) => serializeInline(c).trim());
+  let bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+  if (head.length === 0) {
+    const first = table.querySelector('tr');
+    if (first) {
+      head = Array.from(first.children).map((c) => serializeInline(c).trim());
+      bodyRows = Array.from(table.querySelectorAll('tr')).slice(1);
+    }
+  }
+  if (head.length === 0) return '';
+  const rows = ['| ' + head.join(' | ') + ' |', '| ' + head.map(() => '---').join(' | ') + ' |'];
+  bodyRows.forEach((tr) => {
+    const cells = Array.from(tr.children).map((c) => serializeInline(c).trim());
+    rows.push('| ' + cells.join(' | ') + ' |');
+  });
+  return rows.join('\n');
+}
+
+// ---- Edit mode enter/exit ----
+function enterEditMode() {
+  if (!currentFilePath) { statusText.textContent = 'Open a file to edit'; return; }
+  editorState.active = true;
+  editorState.mode = 'text';
+  editorState.fm = '';
+  editorTextarea.value = currentContent;
+  editorTextarea.style.display = 'block';
+  editorWysiwyg.style.display = 'none';
+  editorModeSwitch.querySelectorAll('.mode-opt').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'text'));
+
+  previewContainer.classList.add('editing');
+  editorDivider.style.display = 'block';
+  editorPane.style.display = 'flex';
+  if (!editorPane.style.height) {
+    editorPane.style.height = Math.round(previewContainer.clientHeight * 0.42) + 'px';
+  }
+  btnEdit.classList.add('active');
+  setEditorDirty(false);
+  editorTextarea.focus();
+  statusText.textContent = 'Editing';
+}
+
+function exitEditMode() {
+  if (editorState.dirty && !confirm('Discard unsaved changes?')) return;
+  editorState.active = false;
+  previewContainer.classList.remove('editing');
+  editorDivider.style.display = 'none';
+  editorPane.style.display = 'none';
+  btnEdit.classList.remove('active');
+  setEditorDirty(false);
+  // Restore the preview to the last saved content.
+  renderTopPreview(currentContent);
+  statusText.textContent = 'Ready';
+}
+
+async function setEditorMode(mode) {
+  if (mode === editorState.mode) return;
+  if (mode === 'wysiwyg') {
+    const { fm, body } = splitFrontmatter(editorTextarea.value);
+    editorState.fm = fm;
+    await renderWysiwygFromMarkdown(body);
+    editorTextarea.style.display = 'none';
+    editorWysiwyg.style.display = 'block';
+    editorState.mode = 'wysiwyg';
+    editorWysiwyg.focus();
+  } else {
+    editorTextarea.value = getEditorMarkdown();
+    editorState.fm = '';
+    editorWysiwyg.style.display = 'none';
+    editorTextarea.style.display = 'block';
+    editorState.mode = 'text';
+    editorTextarea.focus();
+  }
+  editorModeSwitch.querySelectorAll('.mode-opt').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+}
+
+async function saveEditorFile() {
+  if (!editorState.active || !currentFilePath) return;
+  const md = getEditorMarkdown();
+  const res = await window.lumadesk.writeFile(currentFilePath, md);
+  if (res && res.success) {
+    currentContent = md;
+    if (editorState.mode === 'wysiwyg') editorTextarea.value = md;
+    setEditorDirty(false);
+    statusText.textContent = 'Saved';
+  } else {
+    statusText.textContent = 'Save failed: ' + ((res && res.error) || 'unknown');
+  }
+}
+
+// ---- Formatting toolbar ----
+function surroundSelection(before, after, placeholder) {
+  const ta = editorTextarea;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const sel = ta.value.slice(s, e) || placeholder;
+  ta.setRangeText(before + sel + after, s, e, 'end');
+  ta.focus();
+  markEditorDirty();
+  scheduleEditorSync();
+}
+
+function prefixLines(prefix) {
+  const ta = editorTextarea;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const val = ta.value;
+  const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+  let lineEnd = val.indexOf('\n', e);
+  if (lineEnd === -1) lineEnd = val.length;
+  const block = val.slice(lineStart, lineEnd).split('\n').map((l) => prefix + l).join('\n');
+  ta.setRangeText(block, lineStart, lineEnd, 'end');
+  ta.focus();
+  markEditorDirty();
+  scheduleEditorSync();
+}
+
+function insertBlock(text) {
+  const ta = editorTextarea;
+  const s = ta.selectionStart;
+  const before = s > 0 && ta.value[s - 1] !== '\n' ? '\n\n' : '';
+  ta.setRangeText(before + text + '\n', s, ta.selectionEnd, 'end');
+  ta.focus();
+  markEditorDirty();
+  scheduleEditorSync();
+}
+
+function applyEditorCommand(cmd) {
+  if (editorState.mode === 'wysiwyg') return applyWysiwygCommand(cmd);
+  switch (cmd) {
+    case 'bold': surroundSelection('**', '**', 'bold text'); break;
+    case 'italic': surroundSelection('*', '*', 'italic'); break;
+    case 'code': surroundSelection('`', '`', 'code'); break;
+    case 'h1': prefixLines('# '); break;
+    case 'h2': prefixLines('## '); break;
+    case 'h3': prefixLines('### '); break;
+    case 'ul': prefixLines('- '); break;
+    case 'ol': prefixLines('1. '); break;
+    case 'quote': prefixLines('> '); break;
+    case 'codeblock': insertBlock('```\n\n```'); break;
+    case 'table': insertBlock('| Column A | Column B |\n| --- | --- |\n| Cell 1 | Cell 2 |'); break;
+    case 'mermaid': insertBlock('```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```'); break;
+    case 'link': {
+      const url = prompt('Link URL', 'https://');
+      if (url !== null) surroundSelection('[', '](' + url + ')', 'text');
+      break;
+    }
+  }
+}
+
+function applyWysiwygCommand(cmd) {
+  const ex = (c, v) => document.execCommand(c, false, v);
+  switch (cmd) {
+    case 'bold': ex('bold'); break;
+    case 'italic': ex('italic'); break;
+    case 'h1': ex('formatBlock', 'H1'); break;
+    case 'h2': ex('formatBlock', 'H2'); break;
+    case 'h3': ex('formatBlock', 'H3'); break;
+    case 'ul': ex('insertUnorderedList'); break;
+    case 'ol': ex('insertOrderedList'); break;
+    case 'quote': ex('formatBlock', 'BLOCKQUOTE'); break;
+    case 'link': { const url = prompt('Link URL', 'https://'); if (url) ex('createLink', url); break; }
+    default:
+      statusText.textContent = 'Switch to Text mode to insert ' + cmd;
+      return;
+  }
+  editorWysiwyg.focus();
+  markEditorDirty();
+  scheduleEditorSync();
+}
+
+// ---- Wiring ----
+btnEdit.addEventListener('click', () => (editorState.active ? exitEditMode() : enterEditMode()));
+editorSaveBtn.addEventListener('click', saveEditorFile);
+
+editorToolbar.addEventListener('click', (e) => {
+  const btn = e.target.closest('.ed-btn');
+  if (!btn) return;
+  if (btn.id === 'ed-playground') { openPlayground(); return; }
+  if (btn.dataset.cmd) applyEditorCommand(btn.dataset.cmd);
+});
+
+editorModeSwitch.addEventListener('click', (e) => {
+  const b = e.target.closest('.mode-opt');
+  if (b) setEditorMode(b.dataset.mode);
+});
+
+editorTextarea.addEventListener('input', () => { markEditorDirty(); scheduleEditorSync(); });
+editorWysiwyg.addEventListener('input', () => { markEditorDirty(); scheduleEditorSync(); });
+
+// Tab inserts two spaces in the textarea instead of leaving the field.
+editorTextarea.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    editorTextarea.setRangeText('  ', editorTextarea.selectionStart, editorTextarea.selectionEnd, 'end');
+    markEditorDirty();
+  }
+});
+
+// Draggable horizontal divider between preview (top) and editor (bottom).
+let edResizing = false;
+editorDivider.addEventListener('mousedown', (e) => {
+  edResizing = true;
+  editorDivider.classList.add('active');
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!edResizing) return;
+  const rect = previewContainer.getBoundingClientRect();
+  let h = rect.bottom - e.clientY;
+  h = Math.max(80, Math.min(h, rect.height - 120));
+  editorPane.style.height = h + 'px';
+});
+document.addEventListener('mouseup', () => {
+  if (edResizing) {
+    edResizing = false;
+    editorDivider.classList.remove('active');
+    document.body.style.userSelect = '';
+  }
+});
+
 // ---- Keyboard Shortcuts ----
 document.addEventListener('keydown', (e) => {
   // Presentation mode owns most keys when open
@@ -1604,6 +2114,16 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (e.shiftKey) openSingleFile();
     else openFolder();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    if (editorState.active) saveEditorFile();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'e' || e.key === 'E')) {
+    e.preventDefault();
+    if (!btnEdit.disabled) btnEdit.click();
+    return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
     e.preventDefault();
