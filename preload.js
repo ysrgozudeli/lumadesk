@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('lumadesk', {
   rescanFolder: () => ipcRenderer.invoke('rescan-folder'),
   getExtensions: () => ipcRenderer.invoke('get-extensions'),
   setExtensions: (exts) => ipcRenderer.invoke('set-extensions', exts),
+  searchFolder: (query) => ipcRenderer.invoke('search-folder', query),
 
   exportWordWithImages: (options) => ipcRenderer.invoke('export-word-with-images', options),
   exportPdf: (options) => ipcRenderer.invoke('export-pdf', options),

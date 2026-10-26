@@ -298,6 +298,73 @@ ipcMain.handle('rescan-folder', async () => {
   return { path: currentRootDir, tree: scanDirectory(currentRootDir) };
 });
 
+// Search the open folder by file name and file contents. Returns a flat list
+// of matching files; each with any name match flagged and up to a few matching
+// content lines (with line numbers) for preview/jump-to.
+ipcMain.handle('search-folder', async (_event, query) => {
+  const q = String(query || '').trim().toLowerCase();
+  if (!currentRootDir || !q) return { results: [] };
+
+  const MAX_RESULTS = 500;
+  const MAX_SNIPPETS = 5;
+  const results = [];
+
+  function walk(dir) {
+    if (results.length >= MAX_RESULTS) return;
+    let items;
+    try {
+      items = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const dirs = items.filter(i => i.isDirectory() && !i.name.startsWith('.'));
+    const files = items.filter(i => i.isFile() && fileExtensions.some(ext => i.name.endsWith(ext)));
+
+    for (const file of files) {
+      if (results.length >= MAX_RESULTS) return;
+      const full = path.join(dir, file.name);
+      const nameMatch = file.name.toLowerCase().includes(q);
+
+      const snippets = [];
+      let totalContentMatches = 0;
+      try {
+        const content = fs.readFileSync(full, 'utf-8');
+        const lines = content.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].toLowerCase().includes(q)) {
+            totalContentMatches++;
+            if (snippets.length < MAX_SNIPPETS) {
+              snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
+            }
+          }
+        }
+      } catch {
+        // Unreadable file — name match (if any) still counts.
+      }
+
+      if (nameMatch || totalContentMatches > 0) {
+        results.push({
+          path: full,
+          name: cleanDisplayName(file.name.replace(/\.[^.]+$/, '')),
+          rawName: file.name,
+          nameMatch,
+          snippets,
+          totalContentMatches,
+        });
+      }
+    }
+
+    for (const d of dirs) {
+      if (results.length >= MAX_RESULTS) return;
+      walk(path.join(dir, d.name));
+    }
+  }
+
+  walk(currentRootDir);
+  return { results, truncated: results.length >= MAX_RESULTS };
+});
+
 ipcMain.handle('get-extensions', () => fileExtensions);
 
 ipcMain.handle('set-extensions', async (_event, extensions) => {

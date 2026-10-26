@@ -1,6 +1,6 @@
 {
   "name": "lumadesk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Markdown preview and Word export desktop app",
   "author": "Peerluma",
   "main": "main.js",

@@ -281,6 +281,9 @@ async function openFolder() {
   currentTree = result.tree;
   folderName.textContent = result.path.split(/[/\\]/).pop();
   renderTree(result.tree);
+  // Folder mode: enable the sidebar file/content search.
+  clearFolderSearch();
+  $('#sidebar-search').style.display = 'flex';
   statusText.textContent = `Opened: ${result.path}`;
 
   // Auto-select first file
@@ -307,6 +310,9 @@ async function openSingleFile() {
   currentTree = [{ type: 'file', name: result.fileName, path: result.path }];
   folderName.textContent = result.path.split(/[/\\]/).pop();
   renderTree(currentTree);
+  // Single-file mode: no folder to search across.
+  clearFolderSearch();
+  $('#sidebar-search').style.display = 'none';
   await selectFile(result.path);
   statusText.textContent = `Opened: ${result.path}`;
 }
@@ -470,6 +476,16 @@ async function selectFile(filePath) {
 
   // Scroll to top
   $('#preview-container').scrollTop = 0;
+
+  // If this file was opened from a folder-search content result, re-apply the
+  // query as an in-document highlight and jump to the first hit.
+  if (pendingPreviewHighlight) {
+    const q = pendingPreviewHighlight;
+    pendingPreviewHighlight = '';
+    searchBar.style.display = 'flex';
+    searchInput.value = q;
+    highlightSearch(q);
+  }
 }
 
 // ---- Word Export Settings (font/size for body text) ----
@@ -1164,6 +1180,131 @@ searchInput.addEventListener('keydown', (e) => {
 searchNext.addEventListener('click', () => { nextHit(); searchInput.focus(); });
 searchPrev.addEventListener('click', () => { prevHit(); searchInput.focus(); });
 searchClose.addEventListener('click', closeSearch);
+
+// ---- Folder Search (file names + file contents) ----
+const folderSearchInput = $('#folder-search-input');
+const folderSearchClear = $('#folder-search-clear');
+const folderSearchResults = $('#folder-search-results');
+
+let folderSearchTimer = null;
+// Query to re-apply as an in-document highlight after a content result opens.
+let pendingPreviewHighlight = '';
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
+  ));
+}
+
+// Wrap each case-insensitive match of `query` in <mark> for the results list.
+function highlightSnippet(text, query) {
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  let out = '';
+  let last = 0;
+  let idx = lower.indexOf(q);
+  while (idx !== -1) {
+    out += escapeHtml(text.slice(last, idx));
+    out += '<mark>' + escapeHtml(text.slice(idx, idx + query.length)) + '</mark>';
+    last = idx + query.length;
+    idx = lower.indexOf(q, last);
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
+}
+
+function showFolderSearchResults(show) {
+  folderSearchResults.style.display = show ? 'block' : 'none';
+  fileTreeEl.style.display = show ? 'none' : '';
+}
+
+function clearFolderSearch() {
+  folderSearchInput.value = '';
+  folderSearchClear.style.display = 'none';
+  folderSearchResults.innerHTML = '';
+  showFolderSearchResults(false);
+}
+
+async function runFolderSearch(query) {
+  const q = query.trim();
+  folderSearchClear.style.display = q ? 'flex' : 'none';
+
+  if (!q) {
+    showFolderSearchResults(false);
+    folderSearchResults.innerHTML = '';
+    return;
+  }
+
+  const { results, truncated } = await window.lumadesk.searchFolder(q);
+  renderFolderSearchResults(results || [], q, truncated);
+}
+
+function renderFolderSearchResults(results, query, truncated) {
+  showFolderSearchResults(true);
+
+  if (results.length === 0) {
+    folderSearchResults.innerHTML = '<div class="search-empty">No matches found</div>';
+    return;
+  }
+
+  const fileCount = results.length;
+  const matchCount = results.reduce((n, r) => n + r.totalContentMatches, 0);
+  let html = `<div class="search-summary">${fileCount} file${fileCount === 1 ? '' : 's'} &middot; ${matchCount} content match${matchCount === 1 ? '' : 'es'}${truncated ? ' (showing first 500)' : ''}</div>`;
+
+  for (const r of results) {
+    const active = r.path === currentFilePath ? ' active' : '';
+    html += `<div class="search-result${active}" data-path="${escapeHtml(r.path)}">`;
+    html += `<div class="search-result-file">`;
+    html += `<svg class="tree-file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+    html += `<span class="search-result-name">${r.nameMatch ? highlightSnippet(r.name, query) : escapeHtml(r.name)}</span>`;
+    if (r.totalContentMatches > 0) {
+      html += `<span class="search-result-count">${r.totalContentMatches}</span>`;
+    }
+    html += `</div>`;
+    for (const sn of r.snippets) {
+      html += `<div class="search-result-snippet" data-path="${escapeHtml(r.path)}" data-query="${escapeHtml(query)}"><span class="snippet-line">${sn.line}</span><span class="snippet-text">${highlightSnippet(sn.text, query)}</span></div>`;
+    }
+    if (r.totalContentMatches > r.snippets.length) {
+      html += `<div class="search-result-more">+${r.totalContentMatches - r.snippets.length} more</div>`;
+    }
+    html += `</div>`;
+  }
+
+  folderSearchResults.innerHTML = html;
+}
+
+// Open a result: load the file, then (for content matches) re-highlight the
+// query in the preview via the in-document search bar and jump to the first hit.
+async function openSearchResult(filePath, query) {
+  pendingPreviewHighlight = query || '';
+  await selectFile(filePath);
+}
+
+folderSearchResults.addEventListener('click', (e) => {
+  const el = e.target.closest('.search-result-snippet, .search-result');
+  if (!el) return;
+  const filePath = el.dataset.path;
+  const query = el.dataset.query || folderSearchInput.value.trim();
+  if (filePath) openSearchResult(filePath, query);
+});
+
+folderSearchInput.addEventListener('input', () => {
+  clearTimeout(folderSearchTimer);
+  folderSearchTimer = setTimeout(() => runFolderSearch(folderSearchInput.value), 180);
+});
+
+folderSearchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    clearFolderSearch();
+    folderSearchInput.blur();
+  }
+});
+
+folderSearchClear.addEventListener('click', () => {
+  clearFolderSearch();
+  folderSearchInput.focus();
+});
 
 // ---- PPT Export ----
 const btnExportPpt = $('#btn-export-ppt');
