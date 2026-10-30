@@ -1670,8 +1670,18 @@ const editorSaveBtn = $('#editor-save');
 const editorDirtyDot = $('#editor-dirty');
 const editorModeSwitch = $('#editor-mode-switch');
 
-const editorState = { active: false, mode: 'text', dirty: false, fm: '' };
+const editorState = { active: false, mode: 'text', dirty: false, fm: '', wysiwygRange: null };
 let editorSyncTimer = null;
+
+// Clicking the mode switch blurs the contenteditable and clears its selection,
+// so keep the last caret/selection that lived inside it for the mode switch.
+document.addEventListener('selectionchange', () => {
+  if (!editorState.active || editorState.mode !== 'wysiwyg') return;
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && editorWysiwyg.contains(sel.anchorNode)) {
+    editorState.wysiwygRange = sel.getRangeAt(0).cloneRange();
+  }
+});
 
 function setEditorDirty(d) {
   editorState.dirty = d;
@@ -1909,6 +1919,12 @@ function exitEditMode() {
 
 async function setEditorMode(mode) {
   if (mode === editorState.mode) return;
+  // Capture the caret/selection in the pane we're leaving as word-character
+  // counts, plus a scroll fraction as a fallback if we can't locate it.
+  const anchor = captureEditorAnchor();
+  const fromEl = editorState.mode === 'wysiwyg' ? editorWysiwyg : editorTextarea;
+  const fromMax = fromEl.scrollHeight - fromEl.clientHeight;
+  const scrollFrac = fromMax > 0 ? fromEl.scrollTop / fromMax : 0;
   if (mode === 'wysiwyg') {
     const { fm, body } = splitFrontmatter(editorTextarea.value);
     editorState.fm = fm;
@@ -1916,16 +1932,270 @@ async function setEditorMode(mode) {
     editorTextarea.style.display = 'none';
     editorWysiwyg.style.display = 'block';
     editorState.mode = 'wysiwyg';
-    editorWysiwyg.focus();
+    editorWysiwyg.focus({ preventScroll: true });
+    if (!restoreWysiwygAnchor(anchor)) setScrollFrac(editorWysiwyg, scrollFrac);
   } else {
     editorTextarea.value = getEditorMarkdown();
     editorState.fm = '';
     editorWysiwyg.style.display = 'none';
     editorTextarea.style.display = 'block';
     editorState.mode = 'text';
-    editorTextarea.focus();
+    editorTextarea.focus({ preventScroll: true });
+    if (!restoreTextareaAnchor(anchor)) setScrollFrac(editorTextarea, scrollFrac);
   }
   editorModeSwitch.querySelectorAll('.mode-opt').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+}
+
+function setScrollFrac(el, frac) {
+  const max = el.scrollHeight - el.clientHeight;
+  el.scrollTop = max > 0 ? Math.round(frac * max) : 0;
+}
+
+// --- Caret mapping across the two representations -----------------------------
+// The caret is anchored by the TEXT around it, not by an absolute position: we
+// take a small window of word characters (letters/digits) just before and after
+// the caret and search for that same window in the target view. Only word chars
+// are compared, so markdown syntax/whitespace, frontmatter and diagrams between
+// the two views don't throw the match off. Matching is local, so it doesn't
+// drift the way a running character count would.
+const ANCHOR_WIN = 10;     // word chars of context captured on each side of the caret
+const MAX_AMBIGUOUS = 8;   // more identical windows than this → don't trust the match
+const AMBIGUOUS_TOL = 40;  // word chars; best match must be this close to the estimate
+const isWordChar = (ch) => /[\p{L}\p{N}]/u.test(ch);
+
+// Reduce a string to its word chars, keeping each one's original index.
+function wordStream(str) {
+  let chars = '';
+  const idx = [];
+  for (let i = 0; i < str.length; i++) {
+    if (isWordChar(str[i])) { chars += str[i]; idx.push(i); }
+  }
+  return { chars, idx };
+}
+
+function countWordChars(str) {
+  let n = 0;
+  for (let i = 0; i < str.length; i++) if (isWordChar(str[i])) n++;
+  return n;
+}
+
+// Diagrams render as SVG in the visual view but as fenced source in markdown, so
+// their characters never match across views. We exclude them from both word
+// streams and treat each as an opaque boundary the caret can't fall inside.
+const DIAGRAM_SEL = '.mermaid-diagram, .svg-diagram';
+const inDiagram = (node) => !!(node.parentElement && node.parentElement.closest(DIAGRAM_SEL));
+const diagramFilter = {
+  acceptNode: (n) => (inDiagram(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+};
+
+// Markdown word stream with fenced mermaid/svg blocks masked out. `idx` maps each
+// kept word char back to its offset in the original string.
+function markdownWordStream(str) {
+  const excluded = [];
+  // Frontmatter lives in the textarea but not the visual view, so mask it to
+  // keep the two streams aligned (and the position estimate honest).
+  const fmLen = str.length - splitFrontmatter(str).body.length;
+  if (fmLen > 0) excluded.push([0, fmLen]);
+  const re = /```[ \t]*(?:mermaid|svg)\b[\s\S]*?```/gi;
+  let m;
+  while ((m = re.exec(str))) excluded.push([m.index, m.index + m[0].length]);
+  let chars = '';
+  const idx = [];
+  let ei = 0;
+  for (let i = 0; i < str.length; i++) {
+    while (ei < excluded.length && i >= excluded[ei][1]) ei++;
+    if (ei < excluded.length && i >= excluded[ei][0]) continue; // inside a diagram
+    if (isWordChar(str[i])) { chars += str[i]; idx.push(i); }
+  }
+  return { chars, idx };
+}
+
+// Visual word stream (diagrams removed).
+function visualWordChars() {
+  const clone = editorWysiwyg.cloneNode(true);
+  clone.querySelectorAll(DIAGRAM_SEL).forEach((e) => e.remove());
+  return wordStream(clone.textContent).chars;
+}
+
+// Word chars before a WYSIWYG selection boundary, diagrams excluded.
+function visualCountBefore(node, offset) {
+  const r = document.createRange();
+  r.selectNodeContents(editorWysiwyg);
+  r.setEnd(node, offset);
+  const frag = r.cloneContents();
+  frag.querySelectorAll(DIAGRAM_SEL).forEach((e) => e.remove());
+  return countWordChars(frag.textContent);
+}
+
+// The context window (before/after word chars, plus a position fraction for
+// tie-breaking) around a caret sitting after `k` word chars of `chars`.
+function windowAround(chars, k) {
+  return {
+    before: chars.slice(Math.max(0, k - ANCHOR_WIN), k),
+    after: chars.slice(k, k + ANCHOR_WIN),
+    frac: chars.length ? k / chars.length : 0,
+  };
+}
+
+// Number of entries in a sorted `idx` array that are less than `off`.
+function countBefore(idx, off) {
+  let lo = 0, hi = idx.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (idx[mid] < off) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+// Capture { start, end } context windows for the current selection, or null.
+function captureEditorAnchor() {
+  if (editorState.mode === 'text') {
+    const { chars, idx } = markdownWordStream(editorTextarea.value);
+    return {
+      start: windowAround(chars, countBefore(idx, editorTextarea.selectionStart)),
+      end: windowAround(chars, countBefore(idx, editorTextarea.selectionEnd)),
+    };
+  }
+  const range = editorState.wysiwygRange;
+  if (!range || !editorWysiwyg.contains(range.startContainer)) return null;
+  const chars = visualWordChars();
+  return {
+    start: windowAround(chars, visualCountBefore(range.startContainer, range.startOffset)),
+    end: windowAround(chars, visualCountBefore(range.endContainer, range.endOffset)),
+  };
+}
+
+// All positions (word-char count before the seam) where `key` occurs in `chars`.
+function allSplits(chars, key, beforeLen) {
+  const splits = [];
+  for (let at = chars.indexOf(key); at !== -1; at = chars.indexOf(key, at + 1)) {
+    splits.push(at + beforeLen);
+  }
+  return splits;
+}
+
+// Find where a captured window lands in `chars`: the word-char count before the
+// caret in the target. Returns null only if there's nothing to go on.
+//
+// A single match is trusted outright. When the window repeats, we fall back to
+// the caret's proportional position (`expected`): we accept the nearest copy
+// only if it's close to that estimate and there aren't too many copies —
+// otherwise the pattern is too confusing to trust and we use the estimate.
+function locateWindow(chars, win) {
+  if (!chars.length) return null;
+  const expected = win.frac * chars.length;
+  const nearest = (arr) => arr.reduce((b, s) => (Math.abs(s - expected) < Math.abs(b - expected) ? s : b));
+
+  const key = win.before + win.after;
+  if (!key) return Math.round(expected);
+
+  const splits = allSplits(chars, key, win.before.length);
+  if (splits.length === 1) return splits[0];
+  if (splits.length > 1) {
+    const best = nearest(splits);
+    const trustworthy = splits.length <= MAX_AMBIGUOUS && Math.abs(best - expected) <= AMBIGUOUS_TOL;
+    return trustworthy ? best : Math.round(expected);
+  }
+
+  // Full window not found (e.g. a link URL sits between the halves) — try each
+  // half, again preferring a copy near the estimate; else use the estimate.
+  const half = [];
+  if (win.before) {
+    for (let at = chars.indexOf(win.before); at !== -1; at = chars.indexOf(win.before, at + 1)) half.push(at + win.before.length);
+  }
+  if (win.after) {
+    for (let at = chars.indexOf(win.after); at !== -1; at = chars.indexOf(win.after, at + 1)) half.push(at);
+  }
+  if (!half.length) return Math.round(expected);
+  const best = nearest(half);
+  return Math.abs(best - expected) <= AMBIGUOUS_TOL ? best : Math.round(expected);
+}
+
+// Offsets are snapped to word boundaries so punctuation/whitespace in the gap
+// isn't swept in: a selection START sits just before its next word char, an END
+// just after its previous one. `bias` is 'before' (start) or 'after' (end).
+// Offset just after the `p`-th word char.
+function offsetAfterWord(str, idx, p) {
+  if (p <= 0) return 0;
+  if (p >= idx.length) return str.length;
+  return idx[p - 1] + 1;
+}
+// Offset just before the (p+1)-th word char (i.e. skip the gap forward).
+function offsetBeforeWord(str, idx, p) {
+  if (p >= idx.length) return str.length;
+  return idx[p];
+}
+
+function restoreTextareaAnchor(anchor) {
+  if (!anchor) return false;
+  const v = editorTextarea.value;
+  const { chars, idx } = markdownWordStream(v);
+  let ps = locateWindow(chars, anchor.start);
+  let pe = locateWindow(chars, anchor.end);
+  if (ps === null && pe === null) return false;
+  ps = ps ?? pe;
+  pe = pe ?? ps;
+  let s, e;
+  if (ps === pe) {
+    s = e = offsetAfterWord(v, idx, ps);
+  } else {
+    s = offsetBeforeWord(v, idx, Math.min(ps, pe));
+    e = offsetAfterWord(v, idx, Math.max(ps, pe));
+  }
+  editorTextarea.setSelectionRange(s, e);
+  const line = v.slice(0, s).split('\n').length - 1;
+  const lh = parseFloat(getComputedStyle(editorTextarea).lineHeight) || 20;
+  editorTextarea.scrollTop = Math.max(0, line * lh - editorTextarea.clientHeight / 2);
+  return true;
+}
+
+// Resolve a word-char count to a [textNode, offset] position in the WYSIWYG DOM,
+// skipping diagram subtrees so it stays in step with the captured stream.
+// bias 'after' → just after the p-th word char; 'before' → just before the
+// (p+1)-th word char.
+function wysiwygPos(p, bias) {
+  if (p <= 0 && bias === 'after') return [editorWysiwyg, 0];
+  const walker = document.createTreeWalker(editorWysiwyg, NodeFilter.SHOW_TEXT, diagramFilter);
+  let acc = 0, node, last = null;
+  while ((node = walker.nextNode())) {
+    const val = node.nodeValue;
+    for (let i = 0; i < val.length; i++) {
+      if (isWordChar(val[i])) {
+        if (bias === 'before' && acc === p) return [node, i];
+        if (++acc === p && bias === 'after') return [node, i + 1];
+      }
+    }
+    last = node;
+  }
+  return last ? [last, last.nodeValue.length] : [editorWysiwyg, 0];
+}
+
+function restoreWysiwygAnchor(anchor) {
+  if (!anchor) return false;
+  const chars = visualWordChars();
+  let ps = locateWindow(chars, anchor.start);
+  let pe = locateWindow(chars, anchor.end);
+  if (ps === null && pe === null) return false;
+  ps = ps ?? pe;
+  pe = pe ?? ps;
+  if (ps > pe) [ps, pe] = [pe, ps];
+  const collapsed = ps === pe;
+  const [sn, so] = collapsed ? wysiwygPos(ps, 'after') : wysiwygPos(ps, 'before');
+  const [en, eo] = wysiwygPos(pe, 'after');
+  const range = document.createRange();
+  range.setStart(sn, so);
+  range.setEnd(en, eo);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  // Scroll the caret roughly to the middle of the editable pane.
+  let rect = range.getBoundingClientRect();
+  if (!rect.height && sn.parentElement) rect = sn.parentElement.getBoundingClientRect();
+  const box = editorWysiwyg.getBoundingClientRect();
+  if (rect.height || rect.width) {
+    editorWysiwyg.scrollTop += (rect.top - box.top) - editorWysiwyg.clientHeight / 2;
+  }
+  return true;
 }
 
 async function saveEditorFile() {
