@@ -610,6 +610,19 @@ body {
   border-color: var(--border);
 }
 
+/* Close (×) button sits after Save; make its intent clear on hover. */
+#editor-close {
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+#editor-close:hover {
+  background: #e5484d;
+  border-color: #e5484d;
+  color: #fff;
+}
+
 .ed-sep {
   width: 1px;
   height: 18px;

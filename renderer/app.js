@@ -1667,6 +1667,7 @@ const editorToolbar = $('#editor-toolbar');
 const editorTextarea = $('#editor-textarea');
 const editorWysiwyg = $('#editor-wysiwyg');
 const editorSaveBtn = $('#editor-save');
+const editorCloseBtn = $('#editor-close');
 const editorDirtyDot = $('#editor-dirty');
 const editorModeSwitch = $('#editor-mode-switch');
 
@@ -2294,10 +2295,12 @@ function applyWysiwygCommand(cmd) {
 // ---- Wiring ----
 btnEdit.addEventListener('click', () => (editorState.active ? exitEditMode() : enterEditMode()));
 editorSaveBtn.addEventListener('click', saveEditorFile);
+editorCloseBtn.addEventListener('click', exitEditMode);
 
 editorToolbar.addEventListener('click', (e) => {
   const btn = e.target.closest('.ed-btn');
   if (!btn) return;
+  if (btn.id === 'editor-close') return; // handled by its own listener
   if (btn.id === 'ed-playground') { openPlayground(); return; }
   if (btn.dataset.cmd) applyEditorCommand(btn.dataset.cmd);
 });
@@ -2367,6 +2370,10 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape' && playgroundModal.style.display !== 'none') {
     closePlayground();
+    return;
+  }
+  if (e.key === 'Escape' && editorState.active) {
+    exitEditMode();
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'm') {
