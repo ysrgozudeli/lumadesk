@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('lumadesk', {
   exportPdf: (options) => ipcRenderer.invoke('export-pdf', options),
   savePptx: (options) => ipcRenderer.invoke('save-pptx', options),
   showInFolder: (filePath) => ipcRenderer.invoke('show-in-folder', filePath),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  resolveLink: (base, href) => ipcRenderer.invoke('resolve-link', { base, href }),
 
   // Events from main process
   onFileChanged: (callback) => ipcRenderer.on('file-changed', (_e, filePath) => callback(filePath)),

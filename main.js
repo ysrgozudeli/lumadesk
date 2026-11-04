@@ -18,10 +18,26 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
     },
   });
 
   mainWindow.loadFile('renderer/index.html');
+
+  // Safety net: the app UI itself never navigates. If a link somehow drives the
+  // main window to navigate or open a new window (e.g. a target=_blank anchor),
+  // cancel it and hand the URL to the OS browser instead of trapping the user
+  // in a chrome-less page they can't back out of.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (url !== mainWindow.webContents.getURL()) {
+      e.preventDefault();
+      if (/^https?:/i.test(url)) shell.openExternal(url);
+    }
+  });
 
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
@@ -98,6 +114,32 @@ ipcMain.handle('show-in-folder', async (_event, filePath) => {
   }
   shell.showItemInFolder(filePath);
   return { success: true };
+});
+
+// Open a URL (or mailto:/tel: etc.) in the OS default handler.
+ipcMain.handle('open-external', async (_event, url) => {
+  try {
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// Resolve a relative link found in a document against the document's folder,
+// so the renderer can decide whether it points at another local file to open.
+ipcMain.handle('resolve-link', async (_event, { base, href }) => {
+  try {
+    const rel = decodeURIComponent(String(href).split(/[?#]/)[0]);
+    const resolved = path.resolve(path.dirname(base), rel);
+    let exists = false;
+    try {
+      exists = fs.statSync(resolved).isFile();
+    } catch { /* missing path */ }
+    return { path: resolved, exists };
+  } catch (err) {
+    return { error: err.message };
+  }
 });
 
 ipcMain.handle('read-file', async (_event, filePath) => {

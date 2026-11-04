@@ -257,6 +257,13 @@ let currentFilePath = null;
 let currentContent = '';
 let currentTitle = '';
 
+// ---- Navigation history (documents + embedded web pages) ----
+// Each entry is { kind: 'file', path } or { kind: 'web', url }.
+const navBackStack = [];
+let currentView = null;          // the location currently shown
+let suppressHistoryPush = false; // set while restoring from Back
+let pendingAnchorScroll = null;  // #fragment to scroll to after a file loads
+
 // ---- DOM ----
 const $ = (sel) => document.querySelector(sel);
 const btnOpenFolder = $('#btn-open-folder');
@@ -272,6 +279,10 @@ const statusText = $('#status-text');
 const statusFile = $('#status-file');
 const sidebar = $('#sidebar');
 const resizeHandle = $('#resize-handle');
+const btnBack = $('#btn-back');
+const webPane = $('#web-pane');
+const webView = $('#web-view');
+const webUrlLabel = $('#web-url');
 
 // ---- Open Folder ----
 async function openFolder() {
@@ -445,6 +456,16 @@ async function selectFile(filePath) {
     if (!confirm('You have unsaved changes. Discard them and switch files?')) return;
   }
 
+  // Record where we were so Back can return here (unless we're being driven by
+  // Back itself, or just re-selecting the same file).
+  if (!suppressHistoryPush && currentView &&
+      !(currentView.kind === 'file' && currentView.path === filePath)) {
+    pushHistory(currentView);
+  }
+
+  // Leaving any embedded web page — show the document view.
+  showDocMode();
+
   // Update active state in tree
   document.querySelectorAll('.tree-file.active').forEach(el => el.classList.remove('active'));
   const fileEl = document.querySelector(`.tree-file[data-path="${CSS.escape(filePath)}"]`);
@@ -459,6 +480,7 @@ async function selectFile(filePath) {
   currentFilePath = filePath;
   currentContent = result.content;
   currentTitle = result.fileName;
+  currentView = { kind: 'file', path: filePath };
 
   const html = await window.lumadesk.renderMarkdown(result.content);
   previewEl.innerHTML = html;
@@ -480,9 +502,15 @@ async function selectFile(filePath) {
   statusFile.textContent = filePath.split(/[/\\]/).pop();
   statusText.textContent = 'Ready';
 
-  // Scroll to top
+  // Scroll to top (or to a #fragment if we arrived via an internal link).
   $('#preview-container').scrollTop = 0;
   previewPane.scrollTop = 0;
+  if (pendingAnchorScroll) {
+    const id = pendingAnchorScroll;
+    pendingAnchorScroll = null;
+    // Defer so layout (incl. mermaid SVGs) has settled before measuring.
+    requestAnimationFrame(() => scrollToAnchor(id));
+  }
 
   // If editing, load the newly selected file into the editor too.
   if (editorState.active) {
@@ -794,21 +822,162 @@ previewEl.addEventListener('click', (e) => {
   }
 });
 
-// In-page anchor links (Table of Contents) → smooth-scroll to the heading.
-// Handled explicitly because the preview scrolls inside #preview-container,
-// and we want smooth scrolling without pushing a hash onto the URL.
-previewEl.addEventListener('click', (e) => {
-  const link = e.target.closest('a[href^="#"]');
-  if (!link) return;
-  const id = decodeURIComponent(link.getAttribute('href').slice(1));
-  if (!id) return;
-  // Match by id, or by name attribute as a fallback.
+// Smooth-scroll to an in-document anchor (heading id or [name]). Returns whether
+// a matching target was found. Used by both TOC links and internal file links.
+function scrollToAnchor(id) {
+  if (!id) return false;
   const target =
     previewEl.querySelector(`#${CSS.escape(id)}`) ||
     previewEl.querySelector(`[name="${CSS.escape(id)}"]`);
   if (target) {
-    e.preventDefault();
     target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return true;
+  }
+  return false;
+}
+
+function splitHash(href) {
+  const i = href.indexOf('#');
+  return i === -1 ? [href, ''] : [href.slice(0, i), href.slice(i + 1)];
+}
+
+// ---- Navigation history / Back button ----
+function updateBackButton() {
+  btnBack.style.display = navBackStack.length ? 'inline-flex' : 'none';
+}
+
+function pushHistory(entry) {
+  if (!entry) return;
+  navBackStack.push(entry);
+  updateBackButton();
+}
+
+// Toggle the preview-container between document view and embedded web view.
+function showDocMode() {
+  if (webPane.style.display !== 'none') {
+    webPane.style.display = 'none';
+    webView.src = 'about:blank'; // stop the page / free resources
+  }
+}
+
+function showWebMode(url) {
+  if (searchBar.style.display !== 'none') closeSearch();
+  emptyState.style.display = 'none';
+  webUrlLabel.textContent = url;
+  webPane.style.display = 'flex';
+  if (webView.getAttribute('src') !== url) webView.setAttribute('src', url);
+  // Export/edit actions operate on the current document, not a web page.
+  setDocActionsEnabled(false);
+}
+
+function setDocActionsEnabled(on) {
+  [btnExportWord, btnExportPdf, btnExportPpt, btnPresent, btnEdit].forEach((b) => {
+    if (b) b.disabled = !on;
+  });
+}
+
+// Open an external page inside the app (recorded in history).
+function navigateToWeb(url) {
+  if (currentView) pushHistory(currentView);
+  currentView = { kind: 'web', url };
+  showWebMode(url);
+}
+
+async function goBack() {
+  // Prefer the embedded page's own history before leaving it.
+  if (currentView && currentView.kind === 'web') {
+    try {
+      if (webView.canGoBack && webView.canGoBack()) { webView.goBack(); return; }
+    } catch { /* webview not ready */ }
+  }
+  const entry = navBackStack.pop();
+  updateBackButton();
+  if (!entry) return;
+  if (entry.kind === 'web') {
+    currentView = entry;
+    showWebMode(entry.url);
+  } else {
+    suppressHistoryPush = true;
+    try {
+      await selectFile(entry.path);
+      setDocActionsEnabled(true);
+    } finally {
+      suppressHistoryPush = false;
+    }
+  }
+}
+
+btnBack.addEventListener('click', goBack);
+
+// Alt+Left → Back
+document.addEventListener('keydown', (e) => {
+  if (e.altKey && e.key === 'ArrowLeft' && navBackStack.length) {
+    e.preventDefault();
+    goBack();
+  }
+});
+
+// Keep the web bar's URL label in sync as the embedded page navigates.
+webView.addEventListener('did-navigate', (e) => {
+  if (currentView && currentView.kind === 'web' && e.url) {
+    currentView.url = e.url;
+    webUrlLabel.textContent = e.url;
+  }
+});
+webView.addEventListener('did-navigate-in-page', (e) => {
+  if (e.isMainFrame && currentView && currentView.kind === 'web' && e.url) {
+    currentView.url = e.url;
+    webUrlLabel.textContent = e.url;
+  }
+});
+
+$('#web-open-browser').addEventListener('click', () => {
+  if (currentView && currentView.kind === 'web') {
+    window.lumadesk.openExternal(currentView.url);
+  }
+});
+
+// All link clicks in the preview: anchors scroll, web links open in-app,
+// other-file links open that document, and mailto:/tel: go to the OS.
+previewEl.addEventListener('click', async (e) => {
+  const link = e.target.closest('a[href]');
+  if (!link) return;
+  const href = link.getAttribute('href');
+  if (!href) return;
+
+  // In-page anchor (Table of Contents) → smooth-scroll, no hash in the URL.
+  if (href.startsWith('#')) {
+    e.preventDefault();
+    scrollToAnchor(decodeURIComponent(href.slice(1)));
+    return;
+  }
+
+  // Absolute URL with a scheme.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+    e.preventDefault();
+    const scheme = href.slice(0, href.indexOf(':')).toLowerCase();
+    if (scheme === 'http' || scheme === 'https') {
+      navigateToWeb(href);
+    } else {
+      window.lumadesk.openExternal(href); // mailto:, tel:, file:, ...
+    }
+    return;
+  }
+
+  // Relative link → another local file (optionally with a #fragment).
+  e.preventDefault();
+  if (!currentFilePath) return;
+  const [rawPath, frag] = splitHash(href);
+  if (!rawPath) { // bare "#" or empty
+    if (frag) scrollToAnchor(decodeURIComponent(frag));
+    return;
+  }
+  const res = await window.lumadesk.resolveLink(currentFilePath, rawPath);
+  if (res && res.exists) {
+    pendingAnchorScroll = frag ? decodeURIComponent(frag) : null;
+    await selectFile(res.path);
+  } else {
+    statusText.textContent = `Can't open link: ${href}`;
   }
 });
 

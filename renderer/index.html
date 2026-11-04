@@ -19,6 +19,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           Open File
         </button>
+        <button id="btn-back" title="Back (Alt+←)" style="display:none;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Back
+        </button>
         <span id="folder-name" class="folder-label"></span>
       </div>
       <div class="toolbar-right">
@@ -147,6 +151,18 @@
         </div>
         <div id="preview-pane">
           <div id="preview" class="markdown-body" style="display:none;"></div>
+        </div>
+
+        <!-- Embedded web view for external (http/https) links -->
+        <div id="web-pane" style="display:none;">
+          <div id="web-bar">
+            <span id="web-url"></span>
+            <button id="web-open-browser" title="Open this page in your default browser">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              Open in browser
+            </button>
+          </div>
+          <webview id="web-view" src="about:blank"></webview>
         </div>
 
         <!-- Draggable divider (edit mode only) -->
