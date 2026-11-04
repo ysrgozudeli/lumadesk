@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('lumadesk', {
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
   writeFile: (filePath, content) => ipcRenderer.invoke('write-file', { path: filePath, content }),
   renderMarkdown: (markdown) => ipcRenderer.invoke('render-markdown', markdown),
+  readImage: (base, src) => ipcRenderer.invoke('read-image', { base, src }),
   exportWord: (options) => ipcRenderer.invoke('export-word', options),
   rescanFolder: () => ipcRenderer.invoke('rescan-folder'),
   getExtensions: () => ipcRenderer.invoke('get-extensions'),

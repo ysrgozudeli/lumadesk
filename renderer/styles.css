@@ -925,6 +925,18 @@ body {
   border-radius: 8px;
 }
 
+/* Image whose file could not be resolved on disk — make the broken state
+   legible instead of a bare broken-image glyph. */
+.markdown-body img.img-missing {
+  min-width: 120px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px dashed #d1a0a0;
+  background: #fdf2f2;
+  color: #b45454;
+  font-size: 12px;
+}
+
 .mermaid-diagram {
   margin: 1em 0;
   text-align: center;

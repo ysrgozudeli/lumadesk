@@ -25,6 +25,30 @@ async function renderSvgBlocks() {
   }
 }
 
+// ---- Local images ----
+// Markdown like ![alt](assets/pic.png) carries a path relative to the document,
+// but the preview's origin is renderer/index.html, so the browser would resolve
+// it against the wrong folder and show a broken image. Rewrite each local <img>
+// src to a base64 data URL read from disk, resolved against the current file.
+// Data URLs also survive into the PDF-export clone, so images print too.
+async function resolveImages(scope = previewEl) {
+  if (!currentFilePath) return;
+  const imgs = scope.querySelectorAll('img');
+  for (const img of imgs) {
+    const raw = img.getAttribute('src') || '';
+    if (!raw || /^(data:|https?:|file:|blob:)/i.test(raw)) continue;
+    try {
+      const res = await window.lumadesk.readImage(currentFilePath, raw);
+      if (res && res.dataUrl) {
+        img.src = res.dataUrl;
+      } else if (res && res.error) {
+        img.classList.add('img-missing');
+        img.title = `Image not found: ${raw}`;
+      }
+    } catch { /* leave src as-is */ }
+  }
+}
+
 // ---- Mermaid ----
 let mermaidReady = false;
 let mermaidModule = null;
@@ -307,6 +331,41 @@ async function openFolder() {
 btnOpenFolder.addEventListener('click', openFolder);
 btnOpenEmpty.addEventListener('click', openFolder);
 
+// After returning from an in-window web page (the Back button navigates the
+// window back to index.html, reloading this renderer), restore the folder tree
+// and the document that was open. The main process keeps the folder path, so
+// we can rescan it; the open file is remembered in localStorage.
+async function restoreAfterWeb() {
+  let token = null;
+  try { token = JSON.parse(localStorage.getItem('lumadesk:return') || 'null'); } catch { /* ignore */ }
+  if (!token) return;
+  try { localStorage.removeItem('lumadesk:return'); } catch { /* ignore */ }
+
+  try {
+    const res = await window.lumadesk.rescanFolder(); // {path, tree} in folder mode, else null
+    if (res && res.tree) {
+      currentTree = res.tree;
+      folderName.textContent = res.path.split(/[/\\]/).pop();
+      renderTree(res.tree);
+      clearFolderSearch();
+      $('#sidebar-search-wrap').style.display = 'block';
+    } else if (token.file) {
+      // Single-file mode: rebuild the one-item sidebar from the saved path.
+      const name = token.file.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
+      currentTree = [{ type: 'file', name, path: token.file }];
+      folderName.textContent = token.file.split(/[/\\]/).pop();
+      renderTree(currentTree);
+      clearFolderSearch();
+      $('#sidebar-search-wrap').style.display = 'none';
+    }
+  } catch { /* ignore rescan errors */ }
+
+  if (token.file) {
+    try { await selectFile(token.file); } catch { /* file may have moved */ }
+  }
+}
+window.addEventListener('DOMContentLoaded', restoreAfterWeb);
+
 // ---- Open Single File ----
 async function openSingleFile() {
   const result = await window.lumadesk.openFile();
@@ -490,7 +549,8 @@ async function selectFile(filePath) {
   // Close any open search when switching files
   if (searchBar.style.display !== 'none') closeSearch();
 
-  // Render SVG and mermaid diagrams
+  // Resolve local images, then render SVG and mermaid diagrams
+  await resolveImages();
   await renderSvgBlocks();
   await renderMermaidBlocks();
 
@@ -619,6 +679,7 @@ btnExportWord.addEventListener('click', async () => {
     title: currentTitle,
     content: currentContent,
     author: '',
+    basePath: currentFilePath,
     mermaidImages,
     svgImages,
     bodyFont: settings.font || undefined,
@@ -650,6 +711,7 @@ window.lumadesk.onFileChanged(async (filePath) => {
       currentContent = result.content;
       const html = await window.lumadesk.renderMarkdown(result.content);
       previewEl.innerHTML = html;
+      await resolveImages();
       await renderSvgBlocks();
       await renderMermaidBlocks();
       // Re-apply active search after hot-reload
@@ -957,7 +1019,13 @@ previewEl.addEventListener('click', async (e) => {
     e.preventDefault();
     const scheme = href.slice(0, href.indexOf(':')).toLowerCase();
     if (scheme === 'http' || scheme === 'https') {
-      navigateToWeb(href);
+      // Show the page in the app window (reliable — unlike the embedded
+      // <webview>, which rendered blank). Remember the current document so the
+      // injected "Back to LumaDesk" button / Alt+← can restore it on return.
+      try {
+        localStorage.setItem('lumadesk:return', JSON.stringify({ file: currentFilePath || null }));
+      } catch { /* ignore storage errors */ }
+      window.location.href = href; // navigates the main window to the page
     } else {
       window.lumadesk.openExternal(href); // mailto:, tel:, file:, ...
     }
@@ -1679,6 +1747,7 @@ async function renderCurrentSlide() {
   // section.divider, ...) applies just like Marp.
   const cls = slide.sectionClass ? ` class="${slide.sectionClass}"` : '';
   presentSlideEl.innerHTML = `<section${cls}>${html}</section>`;
+  await resolveImages(presentSlideEl);
   presentCounter.textContent = `${presentIndex + 1} / ${presentSlides.length}`;
   const pct = ((presentIndex + 1) / presentSlides.length) * 100;
   presentProgress.style.width = pct + '%';
@@ -1880,6 +1949,7 @@ function getEditorMarkdown() {
 async function renderTopPreview(md) {
   const html = await window.lumadesk.renderMarkdown(md);
   previewEl.innerHTML = html;
+  await resolveImages();
   await renderSvgBlocks();
   await renderMermaidBlocks();
   if (searchBar.style.display !== 'none' && searchInput.value) {
@@ -1901,6 +1971,7 @@ function markEditorDirty() {
 async function renderWysiwygFromMarkdown(body) {
   const html = await window.lumadesk.renderMarkdown(body);
   editorWysiwyg.innerHTML = html;
+  await resolveImages(editorWysiwyg);
   await renderEditorDiagrams(editorWysiwyg);
 }
 

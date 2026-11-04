@@ -24,19 +24,50 @@ function createWindow() {
 
   mainWindow.loadFile('renderer/index.html');
 
-  // Safety net: the app UI itself never navigates. If a link somehow drives the
-  // main window to navigate or open a new window (e.g. a target=_blank anchor),
-  // cancel it and hand the URL to the OS browser instead of trapping the user
-  // in a chrome-less page they can't back out of.
+  // target=_blank / window.open → OS browser (we don't spawn extra windows).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  // In-window web viewing: a clicked http/https link navigates the window to
+  // the page (renders reliably, unlike the embedded <webview>). History is
+  // [index.html, page], so Back returns to the app and the renderer restores
+  // the open document. Non-web schemes that somehow reach here go to the OS.
   mainWindow.webContents.on('will-navigate', (e, url) => {
-    if (url !== mainWindow.webContents.getURL()) {
+    // Allow http/https to load in-window, and file: so Back (history.back())
+    // can return to our own index.html. Other schemes go to the OS.
+    if (/^(https?:|file:)/i.test(url)) return;
+    e.preventDefault();
+    shell.openExternal(url);
+  });
+
+  // Alt+← goes back from a web page to the app (only when there's web history).
+  mainWindow.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && input.alt && input.key === 'ArrowLeft'
+        && mainWindow.webContents.canGoBack()) {
       e.preventDefault();
-      if (/^https?:/i.test(url)) shell.openExternal(url);
+      mainWindow.webContents.goBack();
     }
+  });
+
+  // On a web page, inject a floating "Back to LumaDesk" button so there's a
+  // visible way home (DOM injection, so site CSP doesn't block it).
+  mainWindow.webContents.on('did-navigate', (_e, url) => {
+    if (!/^https?:/i.test(url)) return;
+    mainWindow.webContents.executeJavaScript(`
+      (function () {
+        if (document.getElementById('__lumadesk_back')) return;
+        var b = document.createElement('button');
+        b.id = '__lumadesk_back';
+        b.textContent = '← Back to LumaDesk';
+        b.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;' +
+          'padding:8px 14px;background:#1f2937;color:#fff;border:none;border-radius:8px;' +
+          'font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)';
+        b.addEventListener('click', function () { history.back(); });
+        (document.body || document.documentElement).appendChild(b);
+      })();
+    `).catch(() => { /* page blocked injection; Alt+Left still works */ });
   });
 
   if (process.argv.includes('--dev')) {
@@ -142,6 +173,36 @@ ipcMain.handle('resolve-link', async (_event, { base, href }) => {
   }
 });
 
+// Read a local image referenced from a document and return it as a base64
+// data URL, so the renderer can display images whose src is relative to the
+// document's folder (the preview's own origin is renderer/index.html, so a
+// bare "assets/pic.png" would otherwise resolve to the wrong place). Remote
+// (http/https), data: and file: URLs are left untouched.
+const IMAGE_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+  '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif',
+};
+ipcMain.handle('read-image', async (_event, { base, src }) => {
+  try {
+    const raw = String(src).split(/[?#]/)[0];
+    if (!raw || /^(data:|https?:|file:)/i.test(raw)) return { skip: true };
+    const rel = decodeURIComponent(raw);
+    const resolved = path.isAbsolute(rel) ? rel : path.resolve(path.dirname(base), rel);
+    // Async + guarded so a slow disk, a network path or a huge/irregular file
+    // can never block the main process (which would freeze the whole window).
+    const stat = await fs.promises.stat(resolved);
+    if (!stat.isFile()) return { error: 'not a file' };
+    if (stat.size > 25 * 1024 * 1024) return { error: 'image too large' };
+    const ext = path.extname(resolved).toLowerCase();
+    const mime = IMAGE_MIME[ext] || 'application/octet-stream';
+    const buf = await fs.promises.readFile(resolved);
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('read-file', async (_event, filePath) => {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -223,7 +284,7 @@ ipcMain.handle('export-word', async (_event, { title, content, author }) => {
   }
 });
 
-ipcMain.handle('export-word-with-images', async (_event, { title, content, author, mermaidImages, bodyFont, bodySize, saveMermaidSidecar }) => {
+ipcMain.handle('export-word-with-images', async (_event, { title, content, author, mermaidImages, svgImages, basePath, bodyFont, bodySize, saveMermaidSidecar }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export as Word Document',
     defaultPath: `${sanitizeFilename(title)}.docx`,
@@ -232,7 +293,7 @@ ipcMain.handle('export-word-with-images', async (_event, { title, content, autho
   if (result.canceled) return { canceled: true };
 
   try {
-    await exportToWord({ title, content, author, savePath: result.filePath, mermaidImages, bodyFont, bodySize, saveMermaidSidecar });
+    await exportToWord({ title, content, author, savePath: result.filePath, mermaidImages, svgImages, basePath, bodyFont, bodySize, saveMermaidSidecar });
     return { success: true, path: result.filePath };
   } catch (err) {
     return { error: err.message };
