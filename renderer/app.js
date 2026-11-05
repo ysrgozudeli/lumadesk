@@ -363,6 +363,14 @@ async function restoreAfterWeb() {
   if (token.file) {
     try { await selectFile(token.file); } catch { /* file may have moved */ }
   }
+
+  // Restore the document back-history so the toolbar Back button reappears and
+  // keeps working (selectFile above ran with an empty stack, so it added none).
+  if (Array.isArray(token.back) && token.back.length) {
+    navBackStack.length = 0;
+    navBackStack.push(...token.back);
+    updateBackButton();
+  }
 }
 window.addEventListener('DOMContentLoaded', restoreAfterWeb);
 
@@ -1023,7 +1031,10 @@ previewEl.addEventListener('click', async (e) => {
       // <webview>, which rendered blank). Remember the current document so the
       // injected "Back to LumaDesk" button / Alt+← can restore it on return.
       try {
-        localStorage.setItem('lumadesk:return', JSON.stringify({ file: currentFilePath || null }));
+        localStorage.setItem('lumadesk:return', JSON.stringify({
+          file: currentFilePath || null,
+          back: navBackStack, // preserve document history so Back survives the round-trip
+        }));
       } catch { /* ignore storage errors */ }
       window.location.href = href; // navigates the main window to the page
     } else {
